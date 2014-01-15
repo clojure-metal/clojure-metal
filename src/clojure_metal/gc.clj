@@ -1,0 +1,304 @@
+(ns clojure-metal.gc
+  (:refer-clojure :exclude [cast])
+  (:require [clojure-metal.types :refer :all]
+            [clojure-metal.emit :refer :all]
+            [clojure-metal.llvmc :as llvm]
+            [clojure-metal.state-monad :refer :all])
+  (:import [com.sun.jna Pointer]))
+
+(defllvmstruct mps_ss_t [size-t _zs
+                         size-t _w
+                         size-t _ufs])
+
+(defn MPS_BEGIN [ss]
+  {:pre [ss mps_ss_t]}
+  (gen-plan
+   [casted (<-b (llvm/BuildBitCast ss (llvm/PointerType mps_ss_t 0) "casted"))
+    _mps_zs (<-b (llvm/BuildAlloca size-t "_mps_zs"))
+    _mps_w (<-b (llvm/BuildAlloca size-t "_mps_w"))
+    _mps_ufs (<-b (llvm/BuildAlloca size-t "_mps_ufs"))
+    _mps_wt (<-b (llvm/BuildAlloca size-t "_mps_wt"))
+
+    _ (x=mps_ss_t->_zs _mps_zs casted)
+    _ (x=mps_ss_t->_w _mps_w casted)
+    _ (x=mps_ss_t->_ufs _mps_ufs casted)
+
+    _ (<-b (llvm/BuildStore (const-size-t 0) _mps_wt))
+
+
+    exit-block (add-block "exit_block")
+    old-block (get-block)
+    _ (set-block exit-block)
+    exit-phi (<-b (llvm/BuildPhi size-t "exit"))
+    _ (<-b (llvm/BuildRet exit-phi))
+
+
+    _ (set-block old-block)
+
+
+    _ (assoc-in-plan [:gc :scan] {:_mps_zs _mps_zs
+                                :_mps_w _mps_w
+                                :_mps_ufs _mps_ufs
+                                :_mps_wt _mps_wt
+                                :ss ss
+                                :exit-phi exit-phi
+                                :exit-block exit-block
+                                })]
+   nil))
+
+;; _mps_wt = (mps_word_t)1 << ((size_t)(ref) >> _mps_zs & (sizeof(mps_word_t) * CHAR_BIT - 1))
+;; _mps_ufs |= _mps_wt,
+;; (_mps_w & _mps_wt) != 0
+
+(defn MPS_FIX1 [ref]
+  (gen-plan
+   [_mps_wd (get-in-plan [:gc :scan :_mps_wd])
+    _mps_ufs (get-in-plan [:gc :scan :_mps_ufs])
+    _mps_wt (get-in-plan [:gc :scan :_mps_wt])
+    _mps_w (get-in-plan [:gc :scan :_mps_w])
+    _mps_zs (get-in-plan [:gc :scan :_mps_zs])
+
+    ;; _mps_wt = (mps_word_t)1 << ((size_t)(ref) >> _mps_zs & (sizeof(mps_word_t) * CHAR_BIT - 1))
+    rh (<- (const-size-t (* *size-t-bytes* 7))) ;; (sizeof(mps_word_t) * CHAR_BIT - 1)
+    *_mps_zs (<-b (llvm/BuildLoad _mps_zs "*_mps_zs"))
+    *ref (<-b (llvm/BuildLoad ref "*ref"))
+    ref-size-t (<-b (llvm/BuildPtrToInt *ref size-t "refi"))
+    mid (<-b (llvm/BuildLShr ref-size-t *_mps_zs "mid")) ;; ((size_t)(ref) >> _mps_zs)
+
+    right (<-b (llvm/BuildAnd mid rh "right"))
+  _mps_wt_new (<-b (llvm/BuildShl (const-size-t 1) right "_mps_wt_new"))
+_ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
+
+        ;; _mps_ufs |= _mps_wt,
+    *_mps_ufs (<-b (llvm/BuildLoad _mps_ufs "_mps_ufs"))
+    _mps_ufs_new (<-b (llvm/BuildOr *_mps_ufs _mps_wt_new "|="))
+    _ (<-b (llvm/BuildStore _mps_ufs_new _mps_ufs))
+
+    ;; (_mps_w & _mps_wt) != 0
+    *_mps_w (<-b (llvm/BuildLoad _mps_w "_mps_w"))
+    anded (<-b (llvm/BuildAnd *_mps_w _mps_wt_new "anded"))
+    zero? (<-b (llvm/BuildICmp llvm/LLVMIntEQ anded (const-size-t 0) "zero?"))]
+   zero?))
+
+(defn MPS_FIX12 [ss ref-io]
+  (gen-plan
+   [module (get-in-plan [:module])
+    fix1-result (MPS_FIX1 ref-io)
+    _mps_fix2 (<- (llvm/GetNamedFunction module "_mps_fix2"))
+    if-result (-if (<- fix1-result)
+                   (<-b (llvm/BuildCall _mps_fix2 (into-array Pointer [ss ref-io]) 2 "_mps_fix2"))
+                   (<- (const-size-t 0))
+                   size-t)
+    _ (<- (assert _mps_fix2))]
+   if-result))
+
+
+(defn FIX
+  "_addr should be a gep "
+  [gep]
+  (gen-plan
+   [ss (get-in-plan [:gc :scan :ss])
+    exit-block (get-in-plan [:gc :scan :exit-block])
+    exit-phi (get-in-plan [:gc :scan :exit-phi])
+    _ (<- (assert (and exit-block exit-phi)))
+
+    _addr (<-b (llvm/BuildAlloca i8* "_addr"))
+    _ptr (<-b (llvm/BuildLoad gep "_ptr"))
+    _ (<-b (llvm/BuildStore _ptr _addr))
+    result (MPS_FIX12 ss _addr)
+    zero? (<-b (llvm/BuildICmp llvm/LLVMIntEQ result (const-size-t 0) "zero?"))
+
+    this-block (get-block)
+    continue-block (add-block "continue")
+    _ (<-b (llvm/BuildCondBr zero? continue-block exit-block))
+
+    _ (set-block continue-block)
+    _ (<- (llvm/AddIncoming exit-phi
+                            (into-array Pointer [result])
+                            (into-array Pointer [this-block])
+                            1))
+    addr-val (<-b (llvm/BuildLoad _addr "_addr-val"))
+    _ (<-b (llvm/BuildStore addr-val gep))]
+   nil))
+
+(defn MPS_SCAN_END []
+  (gen-plan
+   [ss (get-in-plan [:gc :scan :ss])
+    _mps_ufs (get-in-plan [:gc :scan :_mps_ufs])
+    _ (mps_ss_t->_ufs=x ss _mps_ufs)]
+   nil))
+
+
+(defn add-externals []
+  (gen-plan
+   [_mps_fix2 (add-function "_mps_fix2" (function-type [i8* (llvm/PointerType i8* 0)] size-t))]
+   nil))
+
+(defmacro defapptype [nm members & {:as fns}]
+  `(do (defllvmstruct ~nm ~members)
+       (let [ns-name# (.getName *ns*)]
+         (def ~(symbol (str "def-" (name nm)))
+           (gen-plan
+            [_# (update-in-plan [:next-type-id]  (fnil inc 0))
+             tid# (get-in-plan [:next-type-id])
+             _# (assoc-in-plan [:known-types ns-name# ~nm :fns] ~fns)
+             _# (assoc-in-plan [:known-types ns-name# ~nm :type-id] tid#)]
+            nil)))))
+
+
+(defapptype fwd_t [size-t tid
+                   i8* new-loc
+                   size-t size]
+  :clojure-metal.gc/size (fn [base]
+                           (gen-plan
+                            [size (=fwd_t->size base)]
+                            size))
+  :clojure-metal.gc/fwd (fn [base]
+                          (gen-plan
+                           [fwd (fwd_t->new-loc)]
+                           fwd)))
+
+(defapptype fwd_small_t [size-t tid
+                   i8* new-loc]
+  :clojure-metal.gc/size (fn [base]
+                           (gen-plan
+                            []
+                            (const-size-t (* 2 *size-t-bytes*))))
+  :clojure-metal.gc/fwd (fn [base]
+                          (gen-plan
+                           [fwd (fwd_small_t->new-loc)]
+                           fwd)))
+
+(defapptype pad_t [size-t tid
+                   size-t size]
+  :clojure-metal.gc/size (fn [base]
+                           (gen-plan
+                            [size (=pad_t->size base)]
+                            size)))
+
+(defllvmstruct cons_t [size-t tid
+                        i8* head
+                       i8* tail])
+
+(defn when-typeid [[val id] body]
+  (gen-plan
+   [cmp (<-b (llvm/BuildICmp llvm/LLVMIntEQ val id (str "typecheck")))
+    then-blk (add-block "then-block")
+    continue-blk (add-block "continue-blk")
+    _ (<-b (llvm/BuildCondBr cmp then-blk continue-blk))
+    _ (set-block then-blk)
+
+    _ body
+
+    _ (<-b (llvm/BuildBr continue-blk))
+
+    _ (set-block continue-blk)]
+   nil))
+
+(defn make-obj-scan-body [{:keys [type-id fns] :as tpmap}]
+  (let [mk-size (::size fns)]
+    (gen-plan
+     [base (get-in-plan [:gc :base])
+      *base (<-b (llvm/BuildLoad base "*base"))
+      typeid (TYPEID *base)
+      _ (when-typeid [typeid (const-size-t type-id)]
+                     (gen-plan
+                      [base_i (<-b (llvm/BuildPtrToInt *base size-t "base_i"))
+                       size (mk-size *base)
+                       base+size (<-b (llvm/BuildAdd base_i size "base+size"))]
+                      nil))]
+     nil)))
+
+(comment
+
+                       *base (<-b (llvm/BuildIntToPtr base+size i8* "*base"))
+                       _ (<-b (llvm/BuildStore *base base))
+  )
+
+(defn make-obj-scan-bodies []
+  (gen-plan
+   [known-types (get-in-plan [:known-types])
+    _ (all (for [[ns types] known-types
+                 [type-name data] types]
+             (make-obj-scan-body data)))]
+   nil))
+
+(def obj_scan_t (function-type [i8* i8* i8*] size-t))
+
+(defn make-obj-scan []
+  (gen-plan
+   [f (add-function "obj_scan" obj_scan_t)
+    _ (set-function f)
+
+    entry-blk (add-block "entry")
+    _ (set-block entry-blk)
+
+    arg0 (param 0)
+    _ (MPS_BEGIN arg0)
+
+    arg1 (param 1)
+
+    base (<-b (llvm/BuildAlloca i8* "base"))
+    _ (<-b (llvm/BuildStore arg1 base))
+
+    _ (assoc-in-plan [:gc :base] base)
+
+    loop-entry (add-block "loop-entry")
+    *base (<-b (llvm/BuildLoad base "*base"))
+    base_i (<-b (llvm/BuildPtrToInt *base size-t "base_i"))
+    limit (param 2)
+    limit_i (<-b (llvm/BuildPtrToInt limit size-t "limit_i"))
+
+    blt (<-b (llvm/BuildICmp llvm/LLVMIntULT base_i limit_i "blt"))
+    continue-scan (add-block "continue-scan")
+    finished-blk (add-block "finished")
+    _ (<-b (llvm/BuildCondBr blt continue-scan finished-blk))
+
+    _ (set-block continue-scan)
+
+    _ (<-b (llvm/BuildBr loop-entry))
+    _ (set-block loop-entry)
+
+    _ (make-obj-scan-bodies)
+
+
+    _ (<-b (llvm/BuildBr loop-entry))
+
+    _ (set-block finished-blk)
+
+    _ (MPS_SCAN_END)
+
+
+    _ (<-b (llvm/BuildRet (const-size-t 0)))]
+   nil))
+
+(comment
+    _ (FIX gep)
+
+    gep (cons_t->head)
+    _ (FIX gep)
+
+
+
+
+x  )
+
+(defn do-it2 []
+  (->
+   (gen-plan
+    [_ (add-externals)
+     _ def-fwd_t
+     _ def-fwd_small_t
+     _ def-pad_t
+     _ (make-obj-scan)]
+    nil)
+   get-state
+   second
+   :module
+   llvm/dump
+   llvm/verify
+   ;llvm/optimize
+   llvm/dump
+   ))
+
+(do-it2)

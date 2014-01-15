@@ -96,6 +96,29 @@
 
 (def get-block (partial get-in-plan [:block]))
 
+
+
+(defmacro <- [expr]
+  "Allows a normal clojure expression to be used in a gen-plan"
+  `(fn [state#]
+     [~expr state#]))
+
+(defmacro <-b [[first & rest]]
+  "Same as <- but assumes that the first arg to the expression will need to be
+   replaced with the :builder from the state map"
+  `(fn [state#]
+     {:pre [(:builder state#)]}
+     [(~first (:builder state#) ~@rest) state#]))
+
+(defn add-block [nm]
+  (gen-plan
+   [f (get-in-plan [:fn])
+    blk (<- (llvm/AppendBasicBlock f (llvm/gen-name nm)))]
+   blk))
+
+
+
+
 #_(defn print-plan []
   (fn [plan]
     (pprint plan)

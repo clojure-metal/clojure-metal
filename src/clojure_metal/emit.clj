@@ -20,26 +20,9 @@
 (def const-i1-1 (llvm/ConstInt types/i1 1 false))
 
 
-(defmacro <- [expr]
-  "Allows a normal clojure expression to be used in a gen-plan"
-  `(fn [state#]
-     [~expr state#]))
-
-(defmacro <-b [[first & rest]]
-  "Same as <- but assumes that the first arg to the expression will need to be
-   replaced with the :builder from the state map"
-  `(fn [state#]
-     [(~first (:builder state#) ~@rest) state#]))
 
 (def set-function (partial assoc-in-plan [:fn]))
 (def get-function (partial get-in-plan [:fn]))
-
-
-(defn add-block [nm]
-  (gen-plan
-   [f (get-in-plan [:fn])
-    blk (<- (llvm/AppendBasicBlock f (llvm/gen-name nm)))]
-   blk))
 
 
 (defn -if [test then else tp]
@@ -126,6 +109,3 @@
    :module
    llvm/dump
    llvm/verify))
-
-
-(do-it)

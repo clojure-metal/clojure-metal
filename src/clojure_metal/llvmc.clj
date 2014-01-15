@@ -86,6 +86,7 @@
 (defnative Integer LLVMAddTargetData)
 (defnative Integer LLVMRunPassManager)
 (defnative Integer LLVMDumpValue)
+(defnative Integer LLVMDumpType)
 (defnative Integer LLVMDisposePassManager)
 (defnative Integer LLVMDisposeExecutionEngine)
 (defnative Integer LLVMBuildRet)
@@ -124,6 +125,10 @@
 (defnative Pointer LLVMBuildLoad)
 (defnative Pointer LLVMBuildStore)
 (defnative Pointer LLVMBuildArrayMalloc)
+
+(defnative Pointer LLVMBuildPtrToInt)
+(defnative Pointer LLVMBuildIntToPtr)
+
 (defnative Pointer LLVMBuildGEP)
 (defnative Pointer LLVMBuildBitCast)
 (defnative Pointer LLVMBuildCast)
