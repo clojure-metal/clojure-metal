@@ -1,0 +1,594 @@
+(ns clojure-metal.llvmc
+  (:import (com.sun.jna Native Pointer Memory))
+  (:require [clojure.java.shell :as shell]
+            [clojure.string :as string]))
+
+(def ^:dynamic *lib* 'LLVM-3.4)
+
+(def strip-chars 4)
+
+(defn get-function [s]
+  `(com.sun.jna.Function/getFunction ~(name *lib*) ~(name s)))
+
+(defn debug [s]
+  (println s)
+  s)
+
+(def debug-mode false)
+
+(defmacro defnative
+  [return-type function-symbol]
+  `(let [func# ~(get-function function-symbol)]
+     (defn ~(symbol (apply str (drop strip-chars (name function-symbol))))
+       [& args#]
+       (let [r# (.invoke func# ~return-type (to-array args#))]
+         (when debug-mode
+           (println "After " ~(name function-symbol))
+           (System/gc)
+           (System/runFinalization)
+           (Thread/sleep 500))
+         r#))))
+
+(defn new-pointer []
+  (let [p (Memory. Pointer/SIZE)]
+   (.clear p)
+    p))
+
+
+(defn to-pointers [& args]
+  (let [arr (make-array Pointer (count args))]
+    (loop [a args
+           c 0]
+      (if a
+        (do (aset arr c (first a))
+            (recur (next a) (inc c)))
+        arr))))
+
+
+(def LLVMCCallConv 0)
+(def LLVMFastCallConv 8)
+(def LLVMColdCallConv 9)
+(def LLVMX86StdcallCallConv 64)
+(def LLVMX86FastcallCallConv 65)
+(defnative Integer LLVMSetFunctionCallConv)
+(defnative Integer LLVMFindFunction)
+
+(defnative Pointer LLVMAppendBasicBlock)
+(defnative Pointer LLVMCreateBuilder)
+
+(defnative Pointer LLVMGetParam)
+
+(defnative Integer LLVMLinkInJIT)
+'(defnative Integer LLVMInitializeNativeTarget)
+
+(defnative Pointer LLVMModuleCreateWithName)
+
+(defnative Pointer LLVMInt32Type)
+(defnative Pointer LLVMFunctionType)
+
+(defnative Pointer LLVMAddFunction)
+
+(defnative Integer LLVMPositionBuilderAtEnd)
+
+(defnative Boolean LLVMVerifyModule)
+
+(def LLVMAbortProcessAction 0)
+(def LLVMPrintMessageAction 1)
+(def LLVMReturnStatusAction 2)
+
+(defnative Pointer LLVMCreateModuleProviderForExistingModule)
+
+(defnative Integer LLVMDisposeMessage)
+(defnative Integer LLVMCreateJITCompiler)
+(defnative Integer LLVMCreateInterpreterForModule)
+(defnative Pointer LLVMCreatePassManager)
+(defnative Pointer LLVMGetExecutionEngineTargetData)
+(defnative Integer LLVMAddTargetData)
+(defnative Integer LLVMRunPassManager)
+(defnative Integer LLVMDumpValue)
+(defnative Integer LLVMDisposePassManager)
+(defnative Integer LLVMDisposeExecutionEngine)
+(defnative Integer LLVMBuildRet)
+(defnative Integer LLVMBuildRetVoid)
+
+(defnative Integer LLVMLinkInJIT)
+(defnative Integer LLVMLinkInInterpreter)
+(defnative Integer LLVMInitializeX86Target)
+(defnative Integer LLVMInitializeX86TargetInfo)
+(defnative Integer LLVMInitializeX86TargetMC)
+(defnative Pointer LLVMRunFunction)
+(defnative Boolean LLVMFindFunction)
+(defnative Pointer LLVMCreateGenericValueOfInt)
+(defnative Integer LLVMGenericValueToInt)
+(defnative Pointer LLVMBuildAdd)
+(defnative Pointer LLVMBuildSub)
+(defnative Pointer LLVMConstInt)
+(defnative Pointer LLVMConstReal)
+(defnative Pointer LLVMBuildICmp)
+(defnative Pointer LLVMBuildFCmp)
+(defnative Pointer LLVMIntType)
+(defnative Pointer LLVMVoidType)
+
+(defnative Pointer LLVMBuildCondBr)
+(defnative Pointer LLVMBuildPhi)
+(defnative Integer LLVMAddIncoming)
+(defnative Pointer LLVMTypeOf)
+(defnative Integer LLVMCountParamTypes)
+(defnative Integer LLVMGetTypeKind)
+(defnative Integer LLVMDisposeGenericValue)
+(defnative Integer LLVMDisposeBuilder)
+(defnative Pointer LLVMBuildBr)
+(defnative Pointer LLVMBuildCall)
+(defnative Pointer LLVMBuildAlloca)
+(defnative Pointer LLVMBuildFree)
+(defnative Pointer LLVMBuildLoad)
+(defnative Pointer LLVMBuildStore)
+(defnative Pointer LLVMBuildArrayMalloc)
+(defnative Pointer LLVMBuildGEP)
+(defnative Pointer LLVMBuildBitCast)
+(defnative Pointer LLVMBuildCast)
+(defnative Pointer LLVMConstString)
+(defnative Pointer LLVMConstInt)
+(defnative Integer LLVMCountStructElementTypes)
+(defnative Pointer LLVMConstPointerCast)
+(defnative Pointer LLVMGetStructElementTypes)
+(defnative Integer LLVMGetTypeKind)
+(defnative Pointer LLVMConstPointerNull)
+(defnative Pointer LLVMInt64Type)
+(defnative Pointer LLVMStructType)
+(defnative Pointer LLVMArrayType)
+(defnative Pointer LLVMVectorType)
+(defnative Pointer LLVMDumpModule)
+(defnative Integer LLVMGetArrayLength)
+(defnative Pointer LLVMGetElementType)
+(defnative Pointer LLVMConstArray)
+(defnative Pointer LLVMConstString)
+(defnative Pointer LLVMConstStruct)
+(defnative Pointer LLVMConstGEP)
+(defnative Pointer LLVMConstVector)
+(defnative Pointer LLVMConstBitCast)
+(defnative Integer LLVMCountParams)
+(defnative Pointer LLVMAddGlobal)
+(defnative Pointer LLVMAddGlobalInAddressSpace)
+(defnative Integer LLVMSetInitializer)
+(defnative Integer LLVMWriteBitcodeToFile)
+(defnative Pointer LLVMGetNamedGlobal)
+(defnative Pointer LLVMGetNamedFunction)
+(defnative Pointer LLVMInt8Type)
+(defnative Pointer LLVMInt1Type)
+(defnative Pointer LLVMFloatType)
+(defnative Pointer LLVMDoubleType)
+(defnative Pointer LLVMPointerType)
+(defnative Integer LLVMSetLinkage)
+(defnative Integer LLVMGetIntTypeWidth)
+(defnative Pointer LLVMBuildStructGEP)
+(defnative Pointer LLVMBuildAdd)
+(defnative Pointer LLVMBuildFAdd)
+(defnative Pointer LLVMBuildFSub)
+(defnative Pointer LLVMBuildMul)
+(defnative Pointer LLVMBuildFMul)
+(defnative Pointer LLVMBuildFDiv)
+(defnative Pointer LLVMBuildSub)
+(defnative Pointer LLVMBuildShl)
+(defnative Pointer LLVMBuildLShr)
+(defnative Pointer LLVMBuildAnd)
+(defnative Pointer LLVMBuildNot)
+(defnative Pointer LLVMBuildZExt)
+(defnative Pointer LLVMBuildTrunc)
+(defnative Pointer LLVMBuildFPToSI)
+(defnative Pointer LLVMBuildSIToFP)
+
+(defnative Pointer LLVMConstAdd)
+(defnative Pointer LLVMConstFAdd)
+(defnative Pointer LLVMConstFSub)
+(defnative Pointer LLVMConstMul)
+(defnative Pointer LLVMConstFMul)
+(defnative Pointer LLVMConstFDiv)
+(defnative Pointer LLVMConstSub)
+(defnative Pointer LLVMConstShl)
+(defnative Pointer LLVMConstLShr)
+(defnative Pointer LLVMConstAnd)
+(defnative Pointer LLVMConstNot)
+(defnative Pointer LLVMConstZExt)
+(defnative Pointer LLVMConstTrunc)
+(defnative Pointer LLVMConstFPToSI)
+(defnative Pointer LLVMConstSIToFP)
+(defnative Pointer LLVMConstOr)
+
+
+
+(defnative Pointer LLVMBuildOr)
+(defnative Pointer LLVMBuildMalloc)
+(defnative Pointer LLVMSizeOf)
+(defnative Pointer LLVMConstNull)
+(defnative Pointer LLVMBuildBinOp)
+(defnative Pointer LLVMBuildAtomicRMW)
+
+(defnative Pointer LLVMBuildExtractElement)
+(defnative Pointer LLVMBuildInsertElement)
+
+(defnative Integer LLVMAddConstantPropagationPass)
+(defnative Integer LLVMAddInstructionCombiningPass)
+(defnative Integer LLVMAddPromoteMemoryToRegisterPass)
+(defnative Integer LLVMAddGVNPass)
+(defnative Integer LLVMAddCFGSimplificationPass)
+(defnative Integer LLVMAddBBVectorizePass)
+(defnative Integer LLVMAddLoopVectorizePass)
+(defnative Integer LLVMAddLoopUnrollPass)
+(defnative Pointer LLVMAddFunctionInliningPass)
+
+
+
+(defn AddDefaultPasses [pm]
+  (doto pm
+    AddFunctionInliningPass
+    #_AddLoopUnrollPass
+    AddConstantPropagationPass
+    AddInstructionCombiningPass
+    AddPromoteMemoryToRegisterPass
+    AddGVNPass
+    AddCFGSimplificationPass
+    AddBBVectorizePass
+    #_AddLoopVectorizePass))
+
+
+(def ^:dynamic *module* (ModuleCreateWithName "tmp"))
+(def ^:dynamic *fn*)
+(def ^:dynamic *locals*)
+(def ^:dynamic *builder*)
+(def ^:dynamic *block*)
+
+(defn init-target []
+  (LinkInJIT)
+  (LinkInInterpreter)
+  (InitializeX86TargetInfo)
+  (InitializeX86Target)
+  (InitializeX86TargetMC))
+
+(init-target)
+
+
+
+(defmacro defenum
+  ([nm defs]
+     `(defenum ~nm 0 ~defs))
+  ([nm init defs]
+     (list* 'do
+            `(def ~nm {:idx ~(zipmap (range)
+                                     (map (comp keyword name) defs))
+                       :defs ~(zipmap (map (comp keyword name) defs)
+                                      (range init Integer/MAX_VALUE))})
+            (map (fn [d idx]
+                   `(def ~d ~idx))
+                 defs
+                 (range init Integer/MAX_VALUE)))))
+
+(defenum LLVMTypeKind
+  [LLVMVoidTypeKind
+   LLVMHalfTypeKind
+   LLVMFloatTypeKind
+   LLVMDoubleTypeKind
+   LLVMX86_FP80TypeKind
+   LLVMFP128TypeKind
+   LLVMPPC_FP128TypeKind
+   LLVMLabelTypeKind
+   LLVMIntegerTypeKind
+   LLVMFunctionTypeKind
+   LLVMStructTypeKind
+   LLVMArrayTypeKind
+   LLVMPointerTypeKind
+   LLVMVectorTypeKind
+   LLVMMetadataTypeKind
+   LLVMX86_MMXTypeKind])
+
+(defenum LLVMCodeGentFileType
+  [LLVMAssemblyFile
+   LLVMObjectFile])
+
+(defenum LLVMRelocMode
+  [LLVMRelocDefault
+   LLVMRelocStatic
+   LLVMRelocPIC
+   LLVMRelocDynamicNoPIC])
+
+(defenum LLVMCodeGenOptLevel
+  [LLVMCodeGenLevelNone
+   LLVMCodeGenLevelLess
+   LLVMCodeGenLevelDefault
+   LLVMCodeGenLevelAggressive])
+
+(defenum LLVMCodeModel
+  [LLVMCodeModelDefault
+   LLVMCodeModelJITDefault
+   LLVMCodeModelSmall
+   LLVMCodeModelKernel
+   LLVMCodeModelMedium
+   LLVMCodeModelLarge])
+
+
+(defenum LLVMLinkage
+  [LLVMExternalLinkage,    ; Externally visible function
+   LLVMAvailableExternallyLinkage,
+   LLVMLinkOnceAnyLinkage, ; Keep one copy of function when linking (inline)
+   LLVMLinkOnceODRLinkage, ; Same, but only replaced by something equivalent.
+   LLVMWeakAnyLinkage,     ; Keep one copy of function when linking (weak)
+   LLVMWeakODRLinkage,     ; Same, but only replaced by something equivalent.
+   LLVMAppendingLinkage,   ; Special purpose, only applies to global arrays
+   LLVMInternalLinkage,    ; Rename collisions when linking (static functions)
+   LLVMPrivateLinkage,     ; Like Internal, but omit from symbol table
+   LLVMDLLImportLinkage,   ; Function to be imported from DLL
+   LLVMDLLExportLinkage,   ; Function to be accessible from DLL
+   LLVMExternalWeakLinkage,; ExternalWeak linkage description
+   LLVMGhostLinkage,       ; Obsolete
+   LLVMCommonLinkage,      ; Tentative definitions
+   LLVMLinkerPrivateLinkage, ; Like Private, but linker removes.
+   LLVMLinkerPrivateWeakLinkage, ; Like LinkerPrivate, but is weak.
+   LLVMLinkerPrivateWeakDefAutoLinkage]) ; Like LinkerPrivateWeak, but possibly hidden.
+
+
+(defenum LLVMIntPredicate
+  32
+  [LLVMIntEQ
+   LLVMIntNE
+   LLVMIntUGT
+   LLVMIntUGE
+   LLVMIntULT
+   LLVMIntULE
+   LLVMIntSGT
+   LLVMIntSGE
+   LLVMIntSLT
+   LLVMIntSLE])
+
+(defenum LLVMRealPredicate
+  [LLVMRealPredicateFalse
+   LLVMRealOEQ
+   LLVMRealOGT
+   LLVMRealOGE
+   LLVMRealOLT
+   LLVMRealOLE
+   LLVMRealONE
+   LLVMRealORD
+   LLVMRealUNO
+   LLVMRealUEQ
+   LLVMRealUGT
+   LLVMRealUGE
+   LLVMRealULT
+   LLVMRealULE
+   LLVMRealUNE
+   LLVMRealPredicateTrue])
+
+(defenum LLVMOpcode
+  1
+  [;; Terminators Instructions
+   LLVMRet
+   LLVMBr
+   LLVMSwitch
+   LLVMIndirectBr
+   LLVMInvoke
+   _Removed
+   LLVMUnreachable
+
+   ;; Standard Binary Operators
+   LLVMAdd
+   LLVMFAdd
+   LLVMSub
+   LLVMFSub
+   LLVMMul
+   LLVMFMul
+   LLVMUDiv
+   LLVMSDiv
+   LLVMFDiv
+   LLVMURem
+   LLVMSRem
+   LLVMFRem
+   ;; Logical operators
+   LLVMShl
+   LLVMLShr
+   LLVMAShr
+   LLVMAnd
+   LLVMOr
+   LLVMXor
+   ;; Memory Operators
+   LLVMAlloca
+   LLVMLoad
+   LLVMStore
+   LLVMGetElementPtr
+   ;; Cast Operators
+   LLVMTrunc
+   LLVMZExt
+   LLVMSExt
+   LLVMFPToUI
+   LLVMFPToSI
+   LLVMUIToFP
+   LLVMSIToFP
+   LLVMFPTrunc
+   LLVMFPExt
+   LLVMPtrToInt
+   LLVMIntToPtr
+   LLVMBitcast
+   ;; Other
+   LLVMICmp
+   LLVMFCmp
+   LLVMPHI
+   LLVMCall
+   LLVMSelect
+   LLVMUserOp1
+   LLVMUserOp2
+   LLVMVAArg
+   LLVMExtractElement
+   LLVMInsertElement
+   LLVMShuffleVector
+   LLVMExtractValue
+   LLVMInsertValue
+   ;; Atomics
+   LLVMFence
+   LLVMAtomicCmpXchg
+   LLVMAtomicRMW
+   ;; Exception handling
+   LLVMResume
+   LLVMLandingPad])
+
+(defenum LLVMAtomicOrdering
+  0
+  [LLVMAtomicOrderingNotAtomic
+  LLVMAtomicOrderingUnordered
+  LLVMAtomicOrderingMonotonic
+  __ ;; No ID 3 enum
+  LLVMAtomicOrderingAcquire
+  LLVMAtomicOrderingRelease
+  LLVMAtomicOrderingAcquireRelease
+  LLVMAtomicOrderingSequentiallyConsistent])
+
+(defenum LLVMAtomicRMWBinOp
+  0
+  [LLVMAtomicRMWBinOpXchg
+   LLVMAtomicRMWBinOpAdd
+   LLVMAtomicRMWBinOpSub
+   LLVMAtomicRMWBinOpAnd
+   LLVMAtomicRMWBinOpNand
+   LLVMAtomicRMWBinOpOr
+   LLVMAtomicRMWBinOpXor
+   LLVMAtomicRMWBinOpMax
+   LLVMAtomicRMWBinOpMin
+   LLVMAtomicRMWBinOpUMax
+   LLVMAtomicRMWBinOpUMin])
+
+(defnative Integer LLVMInitializeCppBackendTargetInfo)
+(defnative Integer LLVMInitializeCppBackendTarget)
+(defnative Integer LLVMInitializeCppBackendTargetMC)
+(defnative Integer LLVMInitializeX86AsmPrinter)
+(defnative Integer LLVMInitializeX86AsmParser)
+
+(defn init-target []
+  (LinkInJIT)
+  (LinkInInterpreter)
+  (InitializeX86TargetInfo)
+  (InitializeX86Target)
+  (InitializeX86TargetMC)
+  (InitializeX86AsmPrinter)
+  (InitializeX86AsmParser)
+  (InitializeCppBackendTargetInfo)
+  (InitializeCppBackendTarget)
+  (InitializeCppBackendTargetMC))
+
+(init-target)
+
+(def CCallConv 0)
+(def FastCallConv 8)
+(def ColdCallConv 9)
+(def X86StdcallCallConv 64)
+(def X86FastcallCallConv 65)
+(def PTXGlobal 71)
+(def PTXDevice 72)
+
+(def AbortProcessAction 0)
+(def PrintMessageAction 1)
+(def ReturnStatusAction 2)
+
+
+(defn map-parr [fn coll]
+  (into-array Pointer
+              (map fn coll)))
+
+(defn value-at [ptr]
+  (.getPointer ptr 0))
+
+(def kw->linkage
+  {:extern LLVMExternalLinkage})
+
+
+
+
+
+
+
+(defnative Pointer LLVMGetFirstTarget)
+(defnative Pointer LLVMGetNextTarget)
+(defnative String LLVMGetTargetName)
+(defnative String LLVMGetTargetDescription)
+(defnative Boolean LLVMTargetHasJIT)
+(defnative Boolean LLVMTargetHasTargetMachine)
+(defnative Boolean LLVMTargetHasAsmBackend)
+(defnative String LLVMGetTarget)
+(defnative Pointer LLVMCreateTargetMachine)
+(defnative Boolean LLVMTargetMachineEmitToFile)
+(defnative Pointer LLVMGetTargetMachineData)
+(defnative Pointer LLVMSetDataLayout)
+(defnative Integer LLVMSetTarget)
+(defnative Pointer LLVMCreateTargetData)
+(defnative String LLVMGetTargetMachineTriple)
+
+(defn gen-name
+  ([]
+     (gen-name "id"))
+  ([prefix]
+     (name (gensym (str prefix "_")))))
+
+(defn target-info [t]
+  {:target t
+   :name (GetTargetName t)
+   :desc (GetTargetDescription t)
+   :jit? (TargetHasJIT t)
+   :machine? (TargetHasTargetMachine t)
+   :asm? (TargetHasAsmBackend t)})
+
+(defn target-seq
+  ([]
+     (let [ft (GetFirstTarget)]
+       (when ft
+         (cons (target-info ft)
+               (lazy-seq
+                (target-seq ft))))))
+  ([t]
+     (let [nt (GetNextTarget t)]
+       (when nt
+         (cons (target-info nt)
+               (lazy-seq
+                (target-seq nt)))))))
+
+
+(defn make-target-machine [module]
+  (let [target (GetTarget module)]
+    (println "--->" target (target-seq))
+    (CreateTargetMachine (:target (second (next (target-seq))))
+                         "i686-apple-darwin12.2.1"
+                         "core-avx-i"
+                         ""
+                         LLVMCodeGenLevelDefault
+                         LLVMRelocDefault
+                         LLVMCodeModelDefault)))
+
+
+(defn temp-file [prefix ext]
+  (let [file (java.io.File/createTempFile prefix ext)]
+    (.deleteOnExit file)
+    (.getCanonicalPath file)))
+
+
+(defn emit-to-file [module filename]
+  (let [err (new-pointer)
+        tm (make-target-machine module)]
+    (println (GetTargetMachineTriple tm))
+    (SetDataLayout module "x86_64-apple-darwin")
+    (when (TargetMachineEmitToFile tm module filename LLVMAssemblyFile err)
+      (assert false (.getString (value-at err) 0)))
+    (DisposeMessage (value-at err))
+    ))
+
+
+(defn verify [module]
+  (VerifyModule module LLVMPrintMessageAction nil)
+  module)
+
+
+(defn optimize [module]
+  (let [pass (CreatePassManager)]
+    (AddDefaultPasses pass)
+    (RunPassManager pass module)
+    (DisposePassManager pass)
+    #_(llvm/DumpModule module)
+    module))
+
+(defn dump [module]
+  (DumpModule module)
+  module)

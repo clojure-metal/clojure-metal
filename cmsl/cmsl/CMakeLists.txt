@@ -10,4 +10,4 @@ SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 
 include_directories(../../../mps/code)
 include_directories(../)
-add_library(cmsl ${clojure-metal})
+add_library(cmsl ${clojure-metal} ../../../mps/code/mps.c)

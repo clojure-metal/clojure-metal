@@ -14,6 +14,6 @@ include_directories(../../../mps/code)
 link_directories(${CLOJURE_METAL_BINARY_DIR})
 
 
-add_executable(test ${clojure-metal-tests} ../../../gtest/fused-src/gtest/gtest-all.cc ../../../mps/code/mps.c)
+add_executable(test ${clojure-metal-tests} ../../../gtest/fused-src/gtest/gtest-all.cc)
 
 target_link_libraries(test cmsl)
