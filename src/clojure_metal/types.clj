@@ -7,10 +7,14 @@
 (def ^:dynamic *size-t-bytes* 8)
 
 (def i8* (llvm/PointerType (llvm/IntType 8) 0))
+(def i8** (llvm/PointerType i8* 0))
 
 (def void (llvm/VoidType))
 
 (def i1 (llvm/IntType 1))
+
+(defn &tp [x]
+  (llvm/PointerType x 0))
 
 (defn function-type [args ret-type]
   (llvm/FunctionType ret-type

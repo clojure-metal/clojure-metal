@@ -159,10 +159,6 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
    nil))
 
 
-(defn add-externals []
-  (gen-plan
-   [_mps_fix2 (add-function "_mps_fix2" (function-type [i8* (llvm/PointerType i8* 0)] size-t))]
-   nil))
 
 (defmacro defapptype [nm members & {:as fns}]
   `(do (defllvmstruct ~nm ~members)
@@ -185,7 +181,7 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
                             size))
   :clojure-metal.gc/fwd (fn [base]
                           (gen-plan
-                           [fwd (fwd_t->new-loc)]
+                           [fwd (=fwd_t->new-loc base)]
                            fwd)))
 
 (defapptype fwd_small_t [size-t tid
@@ -196,7 +192,7 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
                             (const-size-t (* 2 *size-t-bytes*))))
   :clojure-metal.gc/fwd (fn [base]
                           (gen-plan
-                           [fwd (fwd_small_t->new-loc)]
+                           [fwd (=fwd_small_t->new-loc base)]
                            fwd)))
 
 (defapptype pad_t [size-t tid
@@ -348,7 +344,7 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
 
 (defn make-obj-skip []
   (gen-plan
-   [f (add-function "obj_scan" obj_scan_t)
+   [f (add-function "obj_skip" obj_skip_t)
     _ (set-function f)
 
     entry-blk (add-block "entry")
@@ -373,7 +369,8 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
                      [size ((::size fns) base)
                       size (ALIGN-VAL size)
                       base+size (<-b (llvm/BuildAdd base_i size "base+size"))
-                      _ (<-b (llvm/BuildRet base+size))]
+                      casted (<-b (llvm/BuildIntToPtr base+size i8* "casted"))
+                      _ (<-b (llvm/BuildRet casted))]
                      (const-size-t type-id)))))
 
     switch (<-b (llvm/BuildSwitch type-id else-blk (count results)))
@@ -404,6 +401,146 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
     _ (<-b (llvm/BuildRetVoid))]
    nil))
 
+(def obj_isfwd_t (function-type [i8*] i8*))
+
+(defn make-obj-isfwd []
+  (gen-plan
+   [f (add-function "obj_isfwd" obj_isfwd_t)
+    _ (set-function f)
+
+    entry-blk (add-block "entry")
+    _ (set-block entry-blk)
+
+    base (param 0)
+
+    type-id (TYPEID base)
+
+    [_ else-blk] (add-block "else-blk"
+                        (gen-plan
+                         [nullptr (<-b (llvm/BuildIntToPtr (const-size-t 0) i8* "nullptr"))
+                          _ (<-b (llvm/BuildRet nullptr))]
+                         nil))
+
+    known-types (get-in-plan [:known-types])
+    results (all (for [[ns-name types] known-types
+                       [type-name data] types
+                       :let [{:keys [fns type-id]} data]
+                       :when (::fwd fns)]
+                   (add-block (str ns-name "." type-name)
+                    (gen-plan
+                     [fwd ((::fwd fns) base)
+                      _ (<-b (llvm/BuildRet fwd))]
+                     (const-size-t type-id)))))
+
+    switch (<-b (llvm/BuildSwitch type-id else-blk (count results)))
+    _ (all (for [[type-id block] results]
+             (<- (llvm/AddCase switch type-id block))))]
+   nil))
+
+(def obj_fwd_t (function-type [i8* i8*] void))
+
+(defn make-obj-fwd []
+  (gen-plan
+   [f (add-function "obj_fwd" obj_fwd_t)
+    _ (set-function f)
+
+    entry-blk (add-block "entry")
+    _ (set-block entry-blk)
+
+    old-loc (param 0)
+    new-loc (param 1)
+
+    module (get-in-plan [:module])
+    size-fn (<- (llvm/GetNamedFunction module "obj_skip"))
+    limit (<-b (llvm/BuildCall size-fn (into-array Pointer [old-loc]) 1 "limit"))
+
+    base_i (<-b (llvm/BuildPtrToInt old-loc size-t "base_i"))
+    limit_i (<-b (llvm/BuildPtrToInt limit size-t "limit_i"))
+
+    size (<-b (llvm/BuildSub limit_i base_i "size"))
+    size (ALIGN-VAL size)
+
+    small? (<-b (llvm/BuildICmp llvm/LLVMIntEQ size (const-size-t (* 2 *size-t-bytes*)) "small?"))
+
+    [_ not-small] (add-block "not-small"
+                             (gen-plan
+                              [tid (get-in-plan [:known-types "clojure-metal.gc" "fwd_t" :type-id])
+                               _ (<- (assert tid))
+                               _ (fwd_t->tid= old-loc (const-size-t tid))
+                               _ (fwd_t->size= old-loc size)
+                               _ (fwd_t->new-loc= old-loc new-loc)
+                               _ (<-b (llvm/BuildRetVoid))]
+                              nil))
+
+    [_ small] (add-block "not-small"
+                         (gen-plan
+                          [tid (get-in-plan [:known-types "clojure-metal.gc" "fwd_small_t" :type-id])
+                           _ (fwd_small_t->tid= old-loc (const-size-t tid))
+                           _ (fwd_small_t->new-loc= old-loc new-loc)
+                           _ (<-b (llvm/BuildRetVoid))]
+                          nil))
+
+    _ (<-b (llvm/BuildCondBr small? small not-small))]
+   nil))
+
+
+
+(defn add-externals []
+  (gen-plan
+   [_mps_fix2 (add-function "_mps_fix2" (function-type [i8* i8**] size-t))
+    cm_gc_mark_stack (add-function "_cm_gc_mark_stack" (function-type [i8**] i8*))
+    cm_init_gc (add-function "_cm_init_gc"
+                             (function-type
+                              [size-t
+                               (&tp obj_scan_t)
+                               (&tp obj_fwd_t)
+                               (&tp obj_pad_t)
+                               (&tp obj_skip_t)
+                               (&tp obj_isfwd_t)]
+                              i8*))]
+   nil))
+
+
+
+(defn mark-stack []
+  (gen-plan
+   [marker (<-b (llvm/BuildAlloca i8* "marker"))
+    module (get-in-plan [:module])
+    f (<- (llvm/GetNamedFunction module "_cm_gc_mark_stack"))
+    ctx (<-b (llvm/BuildCall f (into-array Pointer [marker]) 1 "marked"))]
+   ctx))
+
+(defn init-gc []
+  (gen-plan
+   [module (get-in-plan [:module])
+    init-fn (<- (llvm/GetNamedFunction module "_cm_init_gc"))
+    a1 (<- (llvm/GetNamedFunction module "obj_scan"))
+    a2 (<- (llvm/GetNamedFunction module "obj_fwd"))
+    a3 (<- (llvm/GetNamedFunction module "obj_pad"))
+    a4 (<- (llvm/GetNamedFunction module "obj_skip"))
+    a5 (<- (llvm/GetNamedFunction module "obj_isfwd"))
+
+    alignment (ALIGNMENT)
+    _ (<-b (llvm/BuildCall init-fn
+                           (into-array Pointer [alignment a1 a2 a3 a4 a5])
+                           6
+                           "init"))]
+   nil))
+
+(defn main []
+  (gen-plan
+   [f (add-function "main" (function-type [] void))
+    _ (set-function f)
+
+    entry-blk (add-block "entry")
+    _ (set-block entry-blk)
+
+    _ (init-gc)
+    _ (mark-stack)
+
+    _ (<-b (llvm/BuildRetVoid))]
+   nil))
+
 (comment
     _ (FIX gep)
 
@@ -423,9 +560,13 @@ x  )
      _ def-fwd_small_t
      _ def-pad_t
      _ def-cons_t
-                                        ; _ (make-obj-scan)
+     _ (make-obj-scan)
      _ (make-obj-skip)
      _ (make-obj-pad)
+     _ (make-obj-isfwd)
+     _ (make-obj-fwd)
+
+     _ (main)
      ]
     nil)
    get-state
@@ -433,8 +574,8 @@ x  )
    :module
    llvm/dump
    llvm/verify
-   llvm/optimize
-   llvm/dump
+   ;llvm/optimize
+   ;llvm/dump
    ))
 
 (do-it2)
