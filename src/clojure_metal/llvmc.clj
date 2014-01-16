@@ -111,6 +111,8 @@
 (defnative Pointer LLVMVoidType)
 
 (defnative Pointer LLVMBuildCondBr)
+(defnative Pointer LLVMBuildSwitch)
+(defnative Integer LLVMAddCase)
 (defnative Pointer LLVMBuildPhi)
 (defnative Integer LLVMAddIncoming)
 (defnative Pointer LLVMTypeOf)

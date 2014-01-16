@@ -139,10 +139,10 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
        (let [ns-name# (.getName *ns*)]
          (def ~(symbol (str "def-" (name nm)))
            (gen-plan
-            [_# (update-in-plan [:next-type-id]  (fnil inc 0))
+            [_# (update-in-plan [:next-type-id]  (fnil inc -1))
              tid# (get-in-plan [:next-type-id])
-             _# (assoc-in-plan [:known-types ns-name# ~nm :fns] ~fns)
-             _# (assoc-in-plan [:known-types ns-name# ~nm :type-id] tid#)]
+             _# (assoc-in-plan [:known-types (name ns-name#) ~(name nm) :fns] ~fns)
+             _# (assoc-in-plan [:known-types (name ns-name#) ~(name nm) :type-id] tid#)]
             nil)))))
 
 
@@ -176,9 +176,22 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
                             [size (=pad_t->size base)]
                             size)))
 
-(defllvmstruct cons_t [size-t tid
-                        i8* head
-                       i8* tail])
+(defapptype cons_t [size-t tid
+                    i8* head
+                    i8* tail]
+  :clojure-metal.gc/size (fn [base]
+                           (gen-plan
+                            []
+                            (const-size-t (* 3 *size-t-bytes*))))
+  :clojure-metal.gc/scan (fn [base]
+                           (gen-plan
+                            [gep (cons_t->head base)
+                             _ (FIX gep)
+
+                             gep (cons_t->tail base)
+                             _ (FIX gep)]
+                            nil)))
+
 
 (defn when-typeid [[val id] body]
   (gen-plan
@@ -195,19 +208,33 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
     _ (set-block continue-blk)]
    nil))
 
-(defn make-obj-scan-body [{:keys [type-id fns] :as tpmap}]
-  (let [mk-size (::size fns)]
+(defn make-obj-scan-body [ns-name tp-name {:keys [type-id fns] :as tpmap}]
+  (let [mk-size (::size fns)
+        mk-scan (::scan fns)]
     (gen-plan
-     [base (get-in-plan [:gc :base])
+     [block (add-block (str ns-name "." tp-name))
+
+      old-block (get-block)
+      _ (set-block block)
+
+      base (get-in-plan [:gc :base])
       *base (<-b (llvm/BuildLoad base "*base"))
-      typeid (TYPEID *base)
-      _ (when-typeid [typeid (const-size-t type-id)]
-                     (gen-plan
-                      [base_i (<-b (llvm/BuildPtrToInt *base size-t "base_i"))
-                       size (mk-size *base)
-                       base+size (<-b (llvm/BuildAdd base_i size "base+size"))]
-                      nil))]
-     nil)))
+      _ (if mk-scan
+          (mk-scan *base)
+          (no-op))
+
+      base_i (<-b (llvm/BuildPtrToInt *base size-t "base_i"))
+      size (mk-size *base)
+      base+size (<-b (llvm/BuildAdd base_i size "base+size"))
+      _ (<-b (llvm/BuildStore *base base))
+
+      continue-blk (get-in-plan [:gc :continue-blk])
+      _ (<- (assert continue-blk))
+
+      _ (<-b (llvm/BuildBr continue-blk))
+
+      _ (set-block old-block)]
+     [(const-size-t type-id) block])))
 
 (comment
 
@@ -218,9 +245,23 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
 (defn make-obj-scan-bodies []
   (gen-plan
    [known-types (get-in-plan [:known-types])
-    _ (all (for [[ns types] known-types
-                 [type-name data] types]
-             (make-obj-scan-body data)))]
+    cur-block (get-block)
+    base (get-in-plan [:gc :base])
+    *base (<-b (llvm/BuildLoad base "*base"))
+    typeid (TYPEID *base)
+    results (all (for [[ns-name types] known-types
+                       [type-name data] types]
+                   (make-obj-scan-body ns-name type-name data)))
+
+    old-block (get-block)
+    failed (add-block "failed")
+    _ (set-block failed)
+    _ (<-b (llvm/BuildRet (const-size-t 42)))
+    _ (set-block old-block)
+
+    switch (<-b (llvm/BuildSwitch typeid failed (count results)))
+    _ (all (for [[type-id block] results]
+           (<- (llvm/AddCase switch type-id block))))]
    nil))
 
 (def obj_scan_t (function-type [i8* i8* i8*] size-t))
@@ -251,6 +292,9 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
 
     blt (<-b (llvm/BuildICmp llvm/LLVMIntULT base_i limit_i "blt"))
     continue-scan (add-block "continue-scan")
+
+    _ (assoc-in-plan [:gc :continue-blk] continue-scan)
+
     finished-blk (add-block "finished")
     _ (<-b (llvm/BuildCondBr blt continue-scan finished-blk))
 
@@ -260,9 +304,6 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
     _ (set-block loop-entry)
 
     _ (make-obj-scan-bodies)
-
-
-    _ (<-b (llvm/BuildBr loop-entry))
 
     _ (set-block finished-blk)
 
@@ -290,15 +331,16 @@ x  )
      _ def-fwd_t
      _ def-fwd_small_t
      _ def-pad_t
+     _ def-cons_t
      _ (make-obj-scan)]
     nil)
    get-state
    second
    :module
    llvm/dump
-   llvm/verify
+   ;llvm/verify
    ;llvm/optimize
-   llvm/dump
+   ;llvm/dump
    ))
 
 (do-it2)
