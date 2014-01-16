@@ -164,6 +164,11 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
     _ (mps_ss_t->_ufs=x ss _mps_ufs)]
    nil))
 
+(defn gen-typeid []
+  (gen-plan
+   [_ (update-in-plan [:next-type-id] (fnil inc -1))
+    tid (get-in-plan [:next-type-id])]
+   tid))
 
 
 (defmacro defapptype [nm members & {:as fns}]
@@ -597,6 +602,23 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
                            "init"))]
    nil))
 
+(defn add-gc []
+  (gen-plan
+    [_ (add-externals)
+     _ def-fwd_t
+     _ def-fwd_small_t
+     _ def-pad_t]
+    nil))
+
+(defn generate-gc-fns []
+  (gen-plan
+   [_ (make-obj-scan)
+    _ (make-obj-skip)
+    _ (make-obj-pad)
+    _ (make-obj-isfwd)
+    _ (make-obj-fwd)]
+   nil))
+
 (defn main []
   (gen-plan
    [f (add-function "main" (function-type [] void))
@@ -648,5 +670,5 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
    ;llvm/dump
    ))
 
-(second (llvm/target-seq))
-(do-it2)
+;;(second (llvm/target-seq))
+;;(do-it2)
