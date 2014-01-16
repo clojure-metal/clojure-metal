@@ -8,6 +8,8 @@
 
 (def i8* (llvm/PointerType (llvm/IntType 8) 0))
 
+(def void (llvm/VoidType))
+
 (def i1 (llvm/IntType 1))
 
 (defn function-type [args ret-type]
@@ -34,7 +36,8 @@
                  (defn ~(symbol (str (name tp) "->" (name nm) "="))
                    [ptr# val#]
                    (gen-plan
-                    [gep# (<-b (llvm/BuildStructGEP ptr# ~idx (llvm/gen-name "gep")))
+                    [casted# (<-b (llvm/BuildBitCast ptr# (llvm/PointerType ~tp 0) "casted"))
+                     gep# (<-b (llvm/BuildStructGEP casted# ~idx (llvm/gen-name "gep")))
                      _# (<-b (llvm/BuildStore val# gep#))]
                     gep#))
                  (defn ~(symbol (str "=" (name tp) "->" (name nm)))

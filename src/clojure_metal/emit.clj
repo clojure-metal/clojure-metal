@@ -67,45 +67,8 @@
 
 
 
-(defn ALIGNMENT []
-  (fn [state]
-    [(llvm/ConstMul (const-size-t (/ 64 8)) (const-size-t 2)) state]))
-
-(defn ALIGN-CONST
-  ;; Aligns a constant int with the alignment
-  ;; Formula is:  (((size) + ALIGNMENT - 1) & ~(ALIGNMENT -1))
-  [size]
-  (gen-plan
-   [align (ALIGNMENT)
-    a-1 (<- (llvm/ConstSub align (const-size-t 1)))
-    s+a-1 (<- (llvm/ConstAdd size a-1))]
-   (llvm/ConstAnd s+a-1 (llvm/ConstNot a-1))))
-
-(defn TYPEID [x]
-  (gen-plan
-   [casted (<-b (llvm/BuildBitCast x (llvm/PointerType types/size-t 0) (gen-name "casted")))
-    val (<-b (llvm/BuildLoad casted (gen-name "load")))]
-   val))
 
 (defn param [idx]
   (gen-plan
    [f (get-function)]
    (llvm/GetParam f idx)))
-
-
-(defn do-it []
-  (->
-   (gen-plan
-    [f (add-function "teststuff" (types/function-type [types/i8*] types/size-t))
-     _ (set-function f)
-     entry (add-block "entry")
-     _ (set-block entry)
-     a (param 0)
-     v (TYPEID a)
-     _ (<-b (llvm/BuildRet v))]
-    f)
-   get-state
-   second
-   :module
-   llvm/dump
-   llvm/verify))

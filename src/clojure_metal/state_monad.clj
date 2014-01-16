@@ -110,11 +110,20 @@
      {:pre [(:builder state#)]}
      [(~first (:builder state#) ~@rest) state#]))
 
-(defn add-block [nm]
-  (gen-plan
-   [f (get-in-plan [:fn])
-    blk (<- (llvm/AppendBasicBlock f (llvm/gen-name nm)))]
-   blk))
+(defn add-block
+  ([nm]
+     (gen-plan
+       [f (get-in-plan [:fn])
+        blk (<- (llvm/AppendBasicBlock f (llvm/gen-name nm)))]
+       blk))
+  ([nm plan]
+     (gen-plan
+      [old (get-block)
+       n (add-block nm)
+       _ (set-block n)
+       v plan
+       _ (set-block old)]
+      [v n])))
 
 
 

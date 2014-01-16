@@ -6,6 +6,36 @@
             [clojure-metal.state-monad :refer :all])
   (:import [com.sun.jna Pointer]))
 
+(defn ALIGNMENT []
+  (fn [state]
+    [(const-size-t (* 2  *size-t-bytes*)) state]))
+
+(defn ALIGN-CONST
+  ;; Aligns a constant int with the alignment
+  ;; Formula is:  (((size) + ALIGNMENT - 1) & ~(ALIGNMENT -1))
+  [size]
+  (gen-plan
+   [align (ALIGNMENT)
+    a-1 (<- (llvm/ConstSub align (const-size-t 1)))
+    s+a-1 (<- (llvm/ConstAdd size a-1))]
+   (llvm/ConstAnd s+a-1 (llvm/ConstNot a-1))))
+
+(defn ALIGN-VAL
+  [size]
+  (gen-plan
+   [builder (get-in-plan [:builder])
+    align (ALIGNMENT)
+    a-1 (<-b (llvm/BuildSub align (const-size-t 1) "sub"))
+    s+a-1 (<-b (llvm/BuildAdd size a-1 "add"))]
+   (llvm/BuildAnd builder s+a-1 (llvm/BuildNot builder a-1 "not") "aligned")))
+
+(defn TYPEID [x]
+  (gen-plan
+   [casted (<-b (llvm/BuildBitCast x (llvm/PointerType size-t 0) "casted"))
+    val (<-b (llvm/BuildLoad casted "loaded"))]
+   val))
+
+
 (defllvmstruct mps_ss_t [size-t _zs
                          size-t _w
                          size-t _ufs])
@@ -225,6 +255,7 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
 
       base_i (<-b (llvm/BuildPtrToInt *base size-t "base_i"))
       size (mk-size *base)
+      size (ALIGN-VAL size)
       base+size (<-b (llvm/BuildAdd base_i size "base+size"))
       _ (<-b (llvm/BuildStore *base base))
 
@@ -313,6 +344,66 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
     _ (<-b (llvm/BuildRet (const-size-t 0)))]
    nil))
 
+(def obj_skip_t (function-type [i8*] i8*))
+
+(defn make-obj-skip []
+  (gen-plan
+   [f (add-function "obj_scan" obj_scan_t)
+    _ (set-function f)
+
+    entry-blk (add-block "entry")
+    _ (set-block entry-blk)
+
+    base (param 0)
+    base_i (<-b (llvm/BuildPtrToInt base size-t "base_i"))
+
+    type-id (TYPEID base)
+
+    [_ else-blk] (add-block "else-blk"
+                        (gen-plan
+                         [_ (<-b (llvm/BuildRet base))]
+                         nil))
+
+    known-types (get-in-plan [:known-types])
+    results (all (for [[ns-name types] known-types
+                       [type-name data] types
+                       :let [{:keys [fns type-id]} data]]
+                   (add-block (str ns-name "." type-name)
+                    (gen-plan
+                     [size ((::size fns) base)
+                      size (ALIGN-VAL size)
+                      base+size (<-b (llvm/BuildAdd base_i size "base+size"))
+                      _ (<-b (llvm/BuildRet base+size))]
+                     (const-size-t type-id)))))
+
+    switch (<-b (llvm/BuildSwitch type-id else-blk (count results)))
+    _ (all (for [[type-id block] results]
+             (<- (llvm/AddCase switch type-id block))))]
+   nil))
+
+(def obj_pad_t (function-type [i8* size-t] void))
+
+(defn make-obj-pad []
+  (gen-plan
+   [f (add-function "obj_pad" obj_pad_t)
+
+    _ (set-function f)
+
+    entry-blk (add-block "entry")
+    _ (set-block entry-blk)
+
+
+    arg0 (param 0)
+    casted (<-b (llvm/BuildBitCast arg0 (llvm/PointerType pad_t 0) "casted"))
+    pad-tid (get-in-plan [:known-types "clojure-metal.gc" "pad_t" :type-id])
+    _ (<- (assert pad-tid))
+
+    _ (pad_t->tid= casted (const-size-t pad-tid))
+    arg1 (param 1)
+    _ (pad_t->size= casted arg1)
+    _ (<-b (llvm/BuildRetVoid))]
+   nil))
+
 (comment
     _ (FIX gep)
 
@@ -332,15 +423,18 @@ x  )
      _ def-fwd_small_t
      _ def-pad_t
      _ def-cons_t
-     _ (make-obj-scan)]
+                                        ; _ (make-obj-scan)
+     _ (make-obj-skip)
+     _ (make-obj-pad)
+     ]
     nil)
    get-state
    second
    :module
    llvm/dump
-   ;llvm/verify
-   ;llvm/optimize
-   ;llvm/dump
+   llvm/verify
+   llvm/optimize
+   llvm/dump
    ))
 
 (do-it2)
