@@ -557,8 +557,8 @@
 (defn make-target-machine [module]
   (let [target (GetTarget module)]
     (println "--->" target (target-seq))
-    (CreateTargetMachine (:target (second (next (target-seq))))
-                         "i686-apple-darwin12.2.1"
+    (CreateTargetMachine (:target (second (target-seq)))
+                         "x86_64-apple-darwin12.2.1"
                          "core-avx-i"
                          ""
                          LLVMCodeGenLevelDefault
@@ -575,12 +575,14 @@
 (defn emit-to-file [module filename]
   (let [err (new-pointer)
         tm (make-target-machine module)]
+    (assert tm)
     (println (GetTargetMachineTriple tm))
     (SetDataLayout module "x86_64-apple-darwin")
     (when (TargetMachineEmitToFile tm module filename LLVMAssemblyFile err)
       (assert false (.getString (value-at err) 0)))
     (DisposeMessage (value-at err))
-    ))
+    module))
+
 
 
 (defn verify [module]

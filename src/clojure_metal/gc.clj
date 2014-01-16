@@ -488,8 +488,8 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
 (defn add-externals []
   (gen-plan
    [_mps_fix2 (add-function "_mps_fix2" (function-type [i8* i8**] size-t))
-    cm_gc_mark_stack (add-function "_cm_gc_mark_stack" (function-type [i8**] i8*))
-    cm_init_gc (add-function "_cm_init_gc"
+    cm_gc_mark_stack (add-function "cm_gc_mark_stack" (function-type [i8**] i8*))
+    cm_init_gc (add-function "cm_init_gc"
                              (function-type
                               [size-t
                                (&tp obj_scan_t)
@@ -506,14 +506,14 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
   (gen-plan
    [marker (<-b (llvm/BuildAlloca i8* "marker"))
     module (get-in-plan [:module])
-    f (<- (llvm/GetNamedFunction module "_cm_gc_mark_stack"))
+    f (<- (llvm/GetNamedFunction module "cm_gc_mark_stack"))
     ctx (<-b (llvm/BuildCall f (into-array Pointer [marker]) 1 "marked"))]
    ctx))
 
 (defn init-gc []
   (gen-plan
    [module (get-in-plan [:module])
-    init-fn (<- (llvm/GetNamedFunction module "_cm_init_gc"))
+    init-fn (<- (llvm/GetNamedFunction module "cm_init_gc"))
     a1 (<- (llvm/GetNamedFunction module "obj_scan"))
     a2 (<- (llvm/GetNamedFunction module "obj_fwd"))
     a3 (<- (llvm/GetNamedFunction module "obj_pad"))
@@ -541,17 +541,6 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
     _ (<-b (llvm/BuildRetVoid))]
    nil))
 
-(comment
-    _ (FIX gep)
-
-    gep (cons_t->head)
-    _ (FIX gep)
-
-
-
-
-x  )
-
 (defn do-it2 []
   (->
    (gen-plan
@@ -574,8 +563,10 @@ x  )
    :module
    llvm/dump
    llvm/verify
+   (llvm/emit-to-file "gc_test.s")
    ;llvm/optimize
    ;llvm/dump
    ))
 
+(second (llvm/target-seq))
 (do-it2)
