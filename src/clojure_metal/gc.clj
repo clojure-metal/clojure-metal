@@ -35,6 +35,12 @@
     val (<-b (llvm/BuildLoad casted "loaded"))]
    val))
 
+(defn TYPEID= [x val]
+  (gen-plan
+   [casted (<-b (llvm/BuildBitCast x (llvm/PointerType size-t 0) "casted"))
+    _ (<-b (llvm/BuildStore val casted))]
+   casted))
+
 
 (defllvmstruct mps_ss_t [size-t _zs
                          size-t _w
@@ -168,8 +174,27 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
             [_# (update-in-plan [:next-type-id]  (fnil inc -1))
              tid# (get-in-plan [:next-type-id])
              _# (assoc-in-plan [:known-types (name ns-name#) ~(name nm) :fns] ~fns)
-             _# (assoc-in-plan [:known-types (name ns-name#) ~(name nm) :type-id] tid#)]
+             _# (assoc-in-plan [:known-types (name ns-name#) ~(name nm) :type-id] tid#)
+             _# (assoc-in-plan [:known-types (name ns-name#) ~(name nm) :llvm-type] ~nm)]
             nil)))))
+
+(defn type-id-by-sym [sym]
+  (gen-plan
+   [tid (get-in-plan [:known-types (namespace sym) (name sym) :type-id])
+    _ (<- (assert tid))]
+   tid))
+
+(defn llvm-type-by-sym [sym]
+  (gen-plan
+   [llvm-type (get-in-plan [:known-types (namespace sym) (name sym) :llvm-type])
+    _ (<- (assert llvm-type))]
+   llvm-type))
+
+(defn fn-by-sym [sym]
+  (gen-plan
+   [module (get-in-plan [:module])
+    f (<- (llvm/GetNamedFunction module (name sym)))]
+   f))
 
 
 (defapptype fwd_t [size-t tid
@@ -483,7 +508,46 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
     _ (<-b (llvm/BuildCondBr small? small not-small))]
    nil))
 
+(defn alloc-amc [type-sym]
+  (gen-plan
+   [klass (llvm-type-by-sym type-sym)
+    type-id (type-id-by-sym type-sym)
+    size (<- (llvm/SizeOf klass))
+    size (ALIGN-VAL size)
+    data (<-b (llvm/BuildAlloca i8* "alloced"))
 
+    f (fn-by-sym :cm_pool_amc_reserve)
+
+    continue-blk (add-block "continue")
+
+
+
+    [val retry-blk] (add-block "retry"
+                               (gen-plan
+                      [this-blk (get-block)
+                       _ (<-b (llvm/BuildCall f
+                                              (into-array Pointer [data size])
+                                              2
+                                              "reserve"))
+
+                       *data (<-b (llvm/BuildLoad data "*data"))
+                       _ (TYPEID= *data (const-size-t type-id))
+
+                       f (fn-by-sym :cm_pool_amc_commit)
+
+                       result (<-b (llvm/BuildCall f
+                                                  (into-array Pointer [data size])
+                                                  2
+                                                  "commit"))
+                       retry? (<-b (llvm/BuildICmp llvm/LLVMIntEQ result (const-size-t 0) "retry?"))
+                       _ (<-b (llvm/BuildCondBr retry? this-blk continue-blk))]
+                      nil #_*data))
+
+   _ (<-b (llvm/BuildBr retry-blk))
+
+    _ (set-block continue-blk)
+    ]
+   val))
 
 (defn add-externals []
   (gen-plan
@@ -497,7 +561,13 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
                                (&tp obj_pad_t)
                                (&tp obj_skip_t)
                                (&tp obj_isfwd_t)]
-                              i8*))]
+                              i8*))
+    cm_pool_amc_reserve (add-function "cm_pool_amc_reserve"
+                                      (function-type
+                                       [i8** size-t] size-t))
+    cm_pool_amc_commit (add-function "cm_pool_amc_commit"
+                                     (function-type
+                                      [i8** size-t] size-t))]
    nil))
 
 
@@ -538,7 +608,17 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
     _ (init-gc)
     _ (mark-stack)
 
-    _ (<-b (llvm/BuildRetVoid))]
+    [val blk] (add-block "loop"
+                         (gen-plan
+                          [val (alloc-amc ::cons_t)
+                           this-blk (get-block)
+                           _ (<-b (llvm/BuildBr this-blk))]
+                          nil))
+
+    _ (<-b (llvm/BuildBr blk))
+
+
+    #_ _ #_(<-b (llvm/BuildRetVoid))]
    nil))
 
 (defn do-it2 []
