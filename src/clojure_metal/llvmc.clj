@@ -54,6 +54,7 @@
 (defnative Integer LLVMFindFunction)
 
 (defnative Pointer LLVMAppendBasicBlock)
+(defnative Pointer LLVMDeleteBasicBlock)
 (defnative Pointer LLVMCreateBuilder)
 
 (defnative Pointer LLVMGetParam)
@@ -558,8 +559,8 @@
   (let [target (GetTarget module)]
     (println "--->" target (target-seq))
     (CreateTargetMachine (:target (second (target-seq)))
-                         "x86_64-apple-darwin12.2.1"
-                         "core-avx-i"
+                         "x86_x64-apple-darwin12.2.1"
+                         ""
                          ""
                          LLVMCodeGenLevelDefault
                          LLVMRelocDefault

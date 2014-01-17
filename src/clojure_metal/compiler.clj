@@ -65,6 +65,14 @@
      (assert l (str "no local " local-name))
      l)))
 
+(defmethod -emit-local :loop
+  [{local-name :name :as ast}]
+  (gen-plan
+   [locals (get-binding [:locals])]
+   (let [l (get locals local-name)]
+     (assert l (str "no local " local-name))
+     l)))
+
 (defmethod -emit-local :arg
   [{:keys [arg-id]}]
   {:pre [(or arg-id)]}
@@ -74,17 +82,60 @@
 
 
 
-#_(defmethod -emit :loop
-  [{:keys [bindings] :as ast}]
-  (gen-plan
-   [_ (all (-emit ))]))
-
 (defmethod -emit :binding
   [{:keys [init] bind-name :name :as ast}]
   (gen-plan
    [v (-emit init)
     _ (push-alter-binding [:locals] assoc bind-name v)]
    v))
+
+(defmethod -emit :recur
+  [{:keys [exprs] :as ast}]
+  (gen-plan
+   [vals (all (map -emit exprs))
+    this-blk (get-block)
+    {:keys [phis block]} (get-binding [:recur-point])
+    _ (<- (mapv (fn [phi init]
+                  (llvm/AddIncoming phi
+                                    (into-array Pointer [init])
+                                    (into-array Pointer [this-blk])
+                                    1))
+                phis vals))
+    _ (<-b (llvm/BuildBr block))]
+   :terminated))
+
+(defmethod -emit :loop
+  [{:keys [bindings body] :as ast}]
+  (gen-plan
+   [vals (all (map -emit bindings))
+    init-blk (get-block)
+    loop-end (add-block "loop-end")
+    [body-val main-blk] (add-block "loop-body"
+                         (gen-plan
+                          [phis (all (map #(<-b (llvm/BuildPhi i8* (str (:name %)))) bindings))
+                           _ (<- (mapv (fn [phi init]
+                                         (llvm/AddIncoming phi
+                                                           (into-array Pointer [init])
+                                                           (into-array Pointer [init-blk])
+                                                           1))
+                                       phis vals))
+                           _ (push-alter-binding [:locals] merge (zipmap (map :name bindings)
+                                                                         phis))
+                           this-blk (get-block)
+                           _ (push-binding [:recur-point] {:phis phis
+                                                           :block this-blk})
+                           body-val (-emit body)
+                           _ (pop-binding [:locals])
+                           _ (if (= body-val :terminated)
+                               (no-op)
+                               (<-b (llvm/BuildBr loop-end)))]
+                          body-val))
+    _ (<-b (llvm/BuildBr main-blk))
+    _ (all (repeat (count bindings) (pop-binding :locals)))
+    _ (if (= body-val :terminated)
+        (<- (llvm/DeleteBasicBlock loop-end))
+        (set-block loop-end))]
+   body-val))
 
 (defmethod -emit :let
   [{:keys [bindings body] :as ast}]
@@ -131,7 +182,10 @@
                                           entry-blk (add-block "entry")
                                           _ (set-block entry-blk)
                                           result (-emit body)
-                                          _ (<-b (llvm/BuildRet result))]
+                                          _ (<- (println result))
+                                          _ (if-not (= result :terminated)
+                                              (<-b (llvm/BuildRet result))
+                                              (no-op))]
                                          nil)})]
             nil)))))
 
@@ -250,9 +304,11 @@
         second
         :module
         llvm/dump
-        llvm/optimize
-        llvm/dump
-        (llvm/emit-to-file "gc_test.s"))))
+        llvm/verify
+        ;llvm/optimize
+        ;llvm/dump
+        (llvm/emit-to-file "gc_test.s")
+        )))
 
 (compile '(do (deftype Cons [head tail meta]
                 ISeq
@@ -268,11 +324,7 @@
                 (Cons. x o nil))
 
               (defn -main []
-                (let [x 42]
-                  x)
-                #_(loop [x 0
-                        s nil]
-                       (if (< x 1000000)
-                         (recur (+ x 1)
-                                (cons x s))
-                         s)))))
+                #_(loop [x nil]
+
+                  x
+                  #_(recur (cons 1 x))))))
