@@ -22,12 +22,74 @@
     result (-emit ret)]
    result))
 
-(defmethod -emit :local
-  [{:keys [arg-id] :as ast}]
-  {:pre [arg-id]}
+(defmulti -emit-local :local)
+
+(defmethod -emit-local :field
+  [{:keys [fields field-count field-id form]}]
+  (let [llvm-type (llvm/StructType (into-array Pointer (concat [size-t]
+                                                               (repeat field-count i8*)))
+                                   (inc field-count)
+                                   false)]
+    (gen-plan
+     [this (param 0)
+      casted (<-b (llvm/BuildBitCast this (&tp llvm-type) "casted"))
+      gep (<-b (llvm/BuildStructGEP casted (inc field-id) (str "*" (name form))))
+      val (<-b (llvm/BuildLoad gep (str (name form))))]
+     val)))
+
+(comment
+    {:pre [(or arg-id)]}
   (gen-plan
    [arg (param arg-id)]
    arg))
+
+(defmethod -emit :local
+  [{:keys [arg-id field-id] :as ast}]
+  (-emit-local ast))
+
+(defmethod -emit :defn
+  [{:keys [fn-name env fn-methods]}]
+  (let [ns (:ns env)]
+    (println (keys (first fn-methods)))
+    (all (for [{:keys [fixed-arity body]} fn-methods
+               :let [full-name (str ns "." fn-name "_" fixed-arity)]]
+           (gen-plan
+            [f (add-function full-name
+                             (function-type (repeat fixed-arity i8*) i8*))
+             _ (assoc-in-plan [:known-fns full-name]
+                              {:llvm-fn f
+                               :gen-body
+                               (gen-plan [_ (set-function f)
+
+                                          entry-blk (add-block "entry")
+                                          _ (set-block entry-blk)
+                                          result (-emit body)
+                                          _ (<-b (llvm/BuildRet result))]
+                                         nil)})]
+            nil)))))
+
+(defmulti -emit-invoke (fn [{:keys [op] :as f} args]
+                         op))
+
+(defmethod -emit-invoke :maybe-class
+  [{:keys [class env]} args]
+  (let [fn-name (str (:ns env) "." class "_" (count args))]
+    (gen-plan
+     [f (find-function fn-name)
+      args (all (map -emit args))
+      result (<-b (llvm/BuildCall f (into-array Pointer args) (count args) "call"))]
+     result)))
+
+(defmethod -emit :invoke
+  [{:keys [args] fn-name :fn :as ast}]
+  (-emit-invoke fn-name args))
+
+(defn build-fn-bodies []
+  (gen-plan
+   [known-fns (get-in-plan [:known-fns])
+    _ (all (for [[_ {:keys [gen-body]}] known-fns]
+             gen-body))]
+   nil))
 
 (defmethod -emit :deftype
   [{:keys [fields type-name env fields field-count protocol-fns]}]
@@ -64,7 +126,7 @@
      nil)))
 
 (defn generate-function-name [ns-name fn-name arity]
-  (str "fn_" + ns-name "." fn-name "_" arity))
+  (str "fn_" ns-name "." fn-name "_" arity))
 
 (defn generate-proto-fn-body [fn-name arity impls]
   (gen-plan
@@ -108,17 +170,18 @@
          [_ (gc/add-gc)
           _ (-emit ast)
           _ (gc/generate-gc-fns)
-          _ (generate-polymorphic-bodies)]
+          _ (generate-polymorphic-bodies)
+          _ (build-fn-bodies)]
          nil)
         get-state
         second
         :module
         llvm/dump)))
 
-(compile '(do (deftype foo [x y]
-                IBar
-                (baz [x] x)
-                (baz [x y] y))
-              (deftype baz [x]
-                IBar
-                (baz [x y] x))))
+(compile '(do (deftype Cons [head tail meta]
+                ISeq
+                (seq [this] tail)
+                (first [this] head)
+                (next [this] tail)
+                IMeta
+                (meta [this] meta))))

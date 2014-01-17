@@ -27,14 +27,36 @@
      :env env
      :protocol-fns
      (vec (for [[proto & methods] specs
-                  [nm args & rest :as form] methods]
+                [nm args & rest :as form] methods]
+            (let [fields-expr (map-indexed
+                               (fn [idx name]
+                                      {:op :binding
+                                       :local :field
+                                       :field-id idx
+                                       :fields fields
+                                       :field-count (count fields)
+                                       :env env
+                                       :form name})
+                               fields)
+                  menv (assoc env
+                        :locals (zipmap fields fields-expr))]
               {:op :protocol-fn
                :protocol proto
-               :name nm
+               :fn-name nm
                :args args
                :arg-count (count args)
                :children [:body]
-               :body (an/analyze-fn-method (next form) env)}))}))
+               :body (an/analyze-fn-method (next form) menv)})))}))
+
+(defmethod parse 'defn
+  [[_ name & rest] env]
+  (let [methods (if (vector? (first rest))
+                  [rest]
+                  rest)]
+    {:op :defn
+     :fn-name name
+     :env env
+     :fn-methods (mapv #(an/analyze-fn-method % env) methods)}))
 
 (defn macroexpand-it [x y]
   (println "macro " x)

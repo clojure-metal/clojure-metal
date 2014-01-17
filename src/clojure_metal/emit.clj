@@ -1,4 +1,5 @@
 (ns clojure-metal.emit
+  (:refer-clojure :exclude [cast compile])
   (:require [clojure-metal.llvmc :as llvm :refer [gen-name]]
             [clojure-metal.types :as types]
             [clojure-metal.state-monad :refer :all])
@@ -64,6 +65,13 @@
           f (llvm/AddFunction module name tp)]
       (llvm/SetFunctionCallConv f llvm/LLVMCCallConv)
       [f state])))
+
+(defn find-function [name]
+  (gen-plan
+   [module (get-in-plan [:module])
+    f (<- (llvm/GetNamedFunction module name))]
+   (do (assert f)
+       f)))
 
 
 
