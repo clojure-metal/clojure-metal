@@ -12,9 +12,21 @@
 (defmulti parse (fn [[nm] env]
                   nm))
 
+(defn parse-ctor [[type & args] env]
+  {:op :ctor
+   :type (symbol (name (:ns env))
+                 (subs (name type) 0 (dec (count (name type)))))
+   :args (mapv #(an/analyze % env) args)
+   :env env})
+
 (defmethod parse :default
   [form env]
-  (an/-parse form env))
+  (println "fmr " form)
+  (if (and (seq? form)
+           (symbol? (first form))
+           (.endsWith (name (first form)) "."))
+    (parse-ctor form env)
+    (an/-parse form env)))
 
 (defmethod parse 'deftype
   [[_ name fields & specs] env]

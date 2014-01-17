@@ -22,6 +22,23 @@
     result (-emit ret)]
    result))
 
+(defmethod -emit :ctor
+  [{:keys [type args env]}]
+  (gen-plan
+   [llvm-type (gc/llvm-type-by-sym type)
+    allocd (gc/alloc-amc type)
+    casted (<-b (llvm/BuildBitCast allocd (&tp llvm-type) "casted"))
+    _ (all (map-indexed
+          (fn [idx arg]
+            (gen-plan
+             [val (-emit arg)
+              gep (<-b (llvm/BuildStructGEP casted (inc idx) (str "arg_" idx)))
+              _ (<-b (llvm/BuildStore val gep))
+              ]
+             nil))
+          args))]
+   allocd))
+
 (defmulti -emit-local :local)
 
 (defmethod -emit-local :field
@@ -34,11 +51,13 @@
      [this (param 0)
       casted (<-b (llvm/BuildBitCast this (&tp llvm-type) "casted"))
       gep (<-b (llvm/BuildStructGEP casted (inc field-id) (str "*" (name form))))
-      val (<-b (llvm/BuildLoad gep (str (name form))))]
+      val (<-b (llvm/BuildLoad gep (str (name form))))
+      ]
      val)))
 
-(comment
-    {:pre [(or arg-id)]}
+(defmethod -emit-local :arg
+  [{:keys [arg-id]}]
+  {:pre [(or arg-id)]}
   (gen-plan
    [arg (param arg-id)]
    arg))
@@ -101,7 +120,7 @@
     (gen-plan
      [tid (gc/gen-typeid)
       _ (assoc-in-plan [:known-types (name (:ns env)) (name type-name)] {:type-id tid
-                                                                         :llvm-type type})
+                                                                         :llvm-type llvm-type})
       _ (assoc-in-plan [:known-types (name (:ns env)) (name type-name) :fns]
                        {::gc/size (fn [base]
                                     (gen-plan
@@ -176,6 +195,8 @@
         get-state
         second
         :module
+        llvm/dump
+        llvm/optimize
         llvm/dump)))
 
 (compile '(do (deftype Cons [head tail meta]
@@ -184,4 +205,6 @@
                 (first [this] head)
                 (next [this] tail)
                 IMeta
-                (meta [this] meta))))
+                (meta [this] meta)
+                (with-meta [this meta]
+                  (Cons. head tail meta)))))

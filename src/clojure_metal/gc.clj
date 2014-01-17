@@ -546,7 +546,7 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
                                                   "commit"))
                        retry? (<-b (llvm/BuildICmp llvm/LLVMIntEQ result (const-size-t 0) "retry?"))
                        _ (<-b (llvm/BuildCondBr retry? this-blk continue-blk))]
-                      nil #_*data))
+                      *data))
 
    _ (<-b (llvm/BuildBr retry-blk))
 
