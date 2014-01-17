@@ -192,7 +192,7 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
 (defn llvm-type-by-sym [sym]
   (gen-plan
    [llvm-type (get-in-plan [:known-types (namespace sym) (name sym) :llvm-type])
-    _ (<- (assert llvm-type))]
+    _ (<- (assert llvm-type (str sym " not a known type")))]
    llvm-type))
 
 (defn fn-by-sym [sym]
@@ -619,7 +619,7 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
     _ (make-obj-fwd)]
    nil))
 
-(defn main []
+(defn main [body]
   (gen-plan
    [f (add-function "main" (function-type [] void))
     _ (set-function f)
@@ -630,17 +630,9 @@ _ (<-b (llvm/BuildStore _mps_wt_new _mps_wt))
     _ (init-gc)
     _ (mark-stack)
 
-    [val blk] (add-block "loop"
-                         (gen-plan
-                          [val (alloc-amc ::cons_t)
-                           this-blk (get-block)
-                           _ (<-b (llvm/BuildBr this-blk))]
-                          nil))
+    _ body
 
-    _ (<-b (llvm/BuildBr blk))
-
-
-    #_ _ #_(<-b (llvm/BuildRetVoid))]
+    _ (<-b (llvm/BuildRetVoid))]
    nil))
 
 (defn do-it2 []

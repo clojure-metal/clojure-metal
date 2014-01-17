@@ -73,13 +73,13 @@
    (do (assert f)
        f)))
 
-(defn add-global [name tp val]
+(defn add-global [name val]
   (println "adding " name)
   (gen-plan
    [module (get-in-plan [:module])
-    gbl (<- (llvm/AddGlobal module tp name))
+    gbl (<- (llvm/AddGlobal module (llvm/TypeOf val) name))
     _ (<- (llvm/SetInitializer gbl val))
-    _ (assoc-in-plan [:known-globals name] {:llvm-type tp
+    _ (assoc-in-plan [:known-globals name] {:llvm-type (llvm/TypeOf val)
                                             :llvm-global gbl})]
    gbl))
 
@@ -91,6 +91,10 @@
     _ (<- (assert gbl))]
    casted))
 
+(defn global-exists? [name]
+  (gen-plan
+   [gbl (get-in-plan [:known-globals name :llvm-global])]
+   gbl))
 
 
 (defn param [idx]

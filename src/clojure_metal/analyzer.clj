@@ -70,6 +70,14 @@
      :env env
      :fn-methods (mapv #(an/analyze-fn-method % env) methods)}))
 
+(defmethod parse 'loop
+  [[_ & rest] env]
+  (an/parse (cons 'loop* rest) env))
+
+(defmethod parse 'let
+  [[_ & rest] env]
+  (an/parse (cons 'let* rest) env))
+
 (defn macroexpand-it [x y]
   (println "macro " x)
   x)

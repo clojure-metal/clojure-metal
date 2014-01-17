@@ -44,6 +44,7 @@
 
 (defmethod -emit-local :field
   [{:keys [fields field-count field-id form]}]
+  {:pre [field-id]}
   (let [llvm-type (llvm/StructType (into-array Pointer (concat [size-t]
                                                                (repeat field-count i8*)))
                                    (inc field-count)
@@ -56,6 +57,14 @@
       ]
      val)))
 
+(defmethod -emit-local :let
+  [{local-name :name :as ast}]
+  (gen-plan
+   [locals (get-binding [:locals])]
+   (let [l (get locals local-name)]
+     (assert l (str "no local " local-name))
+     l)))
+
 (defmethod -emit-local :arg
   [{:keys [arg-id]}]
   {:pre [(or arg-id)]}
@@ -63,11 +72,39 @@
    [arg (param arg-id)]
    arg))
 
+
+
+#_(defmethod -emit :loop
+  [{:keys [bindings] :as ast}]
+  (gen-plan
+   [_ (all (-emit ))]))
+
+(defmethod -emit :binding
+  [{:keys [init] bind-name :name :as ast}]
+  (gen-plan
+   [v (-emit init)
+    _ (push-alter-binding [:locals] assoc bind-name v)]
+   v))
+
+(defmethod -emit :let
+  [{:keys [bindings body] :as ast}]
+  (gen-plan
+   [vals (all (map -emit bindings))
+    val (-emit body)
+    _ (all (repeat (count bindings) (pop-binding :locals)))]
+   val))
+
 (defmulti -emit-const :type)
 
 (defmethod -emit-const :nil
   [ast]
   (primitives/const-nil))
+
+(defmethod -emit-const :number
+  [{:keys [val]}]
+  (cond
+   (integer? val) (primitives/const-int val)
+   :else (assert false)))
 
 (defmethod -emit :const
   [{:keys [] :as ast}]
@@ -202,14 +239,20 @@
           _ (-emit ast)
           _ (gc/generate-gc-fns)
           _ (generate-polymorphic-bodies)
-          _ (build-fn-bodies)]
+          _ (build-fn-bodies)
+          f (find-function "user.-main_0")
+          _ (gc/main
+             (gen-plan
+              [_ (<-b (llvm/BuildCall f (into-array Pointer []) 0 "result"))]
+              nil))]
          nil)
         get-state
         second
         :module
         llvm/dump
         llvm/optimize
-        llvm/dump)))
+        llvm/dump
+        (llvm/emit-to-file "gc_test.s"))))
 
 (compile '(do (deftype Cons [head tail meta]
                 ISeq
@@ -222,4 +265,14 @@
                   (Cons. head tail meta)))
 
               (defn cons [x o]
-                (Cons. x o nil))))
+                (Cons. x o nil))
+
+              (defn -main []
+                (let [x 42]
+                  x)
+                #_(loop [x 0
+                        s nil]
+                       (if (< x 1000000)
+                         (recur (+ x 1)
+                                (cons x s))
+                         s)))))
