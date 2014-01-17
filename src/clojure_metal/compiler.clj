@@ -4,6 +4,7 @@
             [clojure-metal.emit :refer :all]
             [clojure-metal.llvmc :as llvm]
             [clojure-metal.analyzer :as analyzer]
+            [clojure-metal.primitives :as primitives]
             [clojure-metal.gc :as gc]
             [clojure-metal.state-monad :refer :all])
   (:import [com.sun.jna Pointer]))
@@ -61,6 +62,16 @@
   (gen-plan
    [arg (param arg-id)]
    arg))
+
+(defmulti -emit-const :type)
+
+(defmethod -emit-const :nil
+  [ast]
+  (primitives/const-nil))
+
+(defmethod -emit :const
+  [{:keys [] :as ast}]
+  (-emit-const ast))
 
 (defmethod -emit :local
   [{:keys [arg-id field-id] :as ast}]
@@ -128,7 +139,7 @@
                                      (const-size-t (* (inc field-count) *size-t-bytes*))))
                         ::gc/scan (fn [base]
                                     (gen-plan
-                                     [casted (<-b (llvm/BuildBitCast base (&tp llvm-type)))
+                                     [casted (<-b (llvm/BuildBitCast base (&tp llvm-type) "casted"))
                                       _ (all (for [offset (range field-count)]
                                                (gen-plan
                                                 [gep (<-b (llvm/BuildStructGEP casted
@@ -187,6 +198,7 @@
   (let [ast (analyzer/analyze form)]
     (-> (gen-plan
          [_ (gc/add-gc)
+          _ (primitives/add-pimitives)
           _ (-emit ast)
           _ (gc/generate-gc-fns)
           _ (generate-polymorphic-bodies)
@@ -207,4 +219,7 @@
                 IMeta
                 (meta [this] meta)
                 (with-meta [this meta]
-                  (Cons. head tail meta)))))
+                  (Cons. head tail meta)))
+
+              (defn cons [x o]
+                (Cons. x o nil))))

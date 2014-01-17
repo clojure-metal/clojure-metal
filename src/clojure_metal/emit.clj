@@ -73,6 +73,23 @@
    (do (assert f)
        f)))
 
+(defn add-global [name tp val]
+  (println "adding " name)
+  (gen-plan
+   [module (get-in-plan [:module])
+    gbl (<- (llvm/AddGlobal module tp name))
+    _ (<- (llvm/SetInitializer gbl val))
+    _ (assoc-in-plan [:known-globals name] {:llvm-type tp
+                                            :llvm-global gbl})]
+   gbl))
+
+(defn get-global [name]
+  (println "finding " name)
+  (gen-plan
+   [gbl (get-in-plan [:known-globals name :llvm-global])
+    casted (<-b (llvm/BuildBitCast gbl types/i8* name))
+    _ (<- (assert gbl))]
+   casted))
 
 
 
