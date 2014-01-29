@@ -374,6 +374,14 @@
                                                                 next
                                                                 (cons retval))))
 
+             [:INTRINSIC 'clojure.metal.native/-] (let [retval (math- (first stack)
+                                                                      (second stack))]
+                                                    (recur (inc ip)
+                                                           (->> stack
+                                                                next
+                                                                next
+                                                                (cons retval))))
+
              [:JMP-IF-FALSE a] (if (identical? WFalse (first stack))
                                   (recur (+ ip a)
                                          (next stack))
@@ -391,7 +399,7 @@
 (-> (analyze '(do
                 (defn + [x y]
                   (clojure.metal.native/+ x y))
-                #_(defn - [x y]
+                (defn - [x y]
                   (clojure.metal.native/- x y))
                 (defn < [x y]
                   (clojure.metal.native/< x y))
@@ -399,13 +407,13 @@
                   (if (< x max)
                     (count-up (+ x 1) max)
                     x))
-                (count-up 0 1000000)
-                #_(defn fib [max]
+                (defn fib [max]
                   (if (< max 2)
                     max
                     (+ (fib (- max 1))
                        (fib (- max 2)))))
-                #_(fib 10)))
+                (defn -main []
+                  (fib 10))))
     debug
     compile-ast
     debug
