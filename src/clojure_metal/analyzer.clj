@@ -1,6 +1,7 @@
 (ns clojure-metal.analyzer
   (:refer-clojure :exclude [cast eval])
-  (:require [clojure.tools.analyzer :as an]
+  (:require [clojure.core.match :refer [match]]
+            [clojure.tools.analyzer :as an]
             [clojure.tools.analyzer.utils :as an-util]
             [clojure.tools.analyzer.ast :as an-ast]))
 
@@ -27,12 +28,19 @@
    :args (mapv #(an/analyze % env) args)
    :env env})
 
+(def intrinsics '{clojure.metal.native/- 2
+                  clojure.metal.native/+ 2
+                  clojure.metal.native/< 2})
+
 (defmethod parse :default
   [form env]
+  (println "->>>>> form" form)
   (if (and (seq? form)
-           (symbol? (first form))
-           (.endsWith (name (first form)) "."))
-    (parse-ctor form env)
+           (contains? intrinsics (first form)))
+    {:op :intrinsic
+     :intrinsic (first form)
+     :children [:args]
+     :args (mapv #(an/analyze % env) (next form))}
     (an/-parse form env)))
 
 (defn add-fn-var [{:keys [ns namespaces] :as env} nm var]
@@ -177,7 +185,33 @@
 (defprotocol IInvokable
   (invoke [f args globals consts]))
 
-(defrecord WInteger [value])
+(defprotocol IMathPrimitive
+  (math- [this other])
+  (math+ [this other])
+  (math< [this other]))
+
+(defrecord WBool [true?])
+
+(def WTrue (->WBool true))
+(def WFalse (->WBool false))
+
+(defrecord WInteger [value]
+  IMathPrimitive
+  (math- [this other]
+    (->WInteger (- (:value this)
+                   (:value other))))
+  (math+ [this other]
+    (->WInteger (+ (:value this)
+                   (:value other))))
+  (math< [this other]
+    (if (< (:value this)
+           (:value other))
+      WTrue
+      WFalse)))
+
+
+
+
 (defrecord Fn [name methods]
   IInvokable
   (invoke [f args globals consts]
@@ -234,6 +268,13 @@
   [{:keys [arg-id]} locals]
   [[:LOAD-ARG arg-id]])
 
+(defmethod -compile-ast :intrinsic
+  [{:keys [intrinsic args]} locals]
+  (assert (= (count args) (get intrinsics intrinsic))
+          (str "Wrong number of args (" (count args) ") given to intrinsic " intrinsic))
+   `[~@(mapcat #(-compile-ast % locals) args)
+    [:INTRINSIC ~intrinsic]])
+
 
 
 (defmethod -compile-ast :maybe-class
@@ -257,6 +298,18 @@
   [fixed-arity (->FnMethod `[~@(-compile-ast body locals)
                              [:RET-VAL]])])
 
+
+(defmethod -compile-ast :if
+  [{:keys [test then else] :as ast} locals]
+  (let [testexprs (-compile-ast test locals)
+        thenexprs (-compile-ast then locals)
+        elseexprs (-compile-ast else locals)]
+    `[~@testexprs
+      [:JMP-IF-FALSE ~(+ 2 (count thenexprs))]
+      ~@thenexprs
+      [:JMP ~(inc (count elseexprs))]
+      ~@elseexprs]))
+
 (defn compile-ast
   ([ast]
      (compile-ast ast (atom {:consts {}})))
@@ -277,54 +330,87 @@
 (defn run-instructions [globals consts args instructions]
   (loop [ip 0
          stack ()]
-    (let [inst (nth instructions ip)
+    (let [inst (nth instructions ip)]
+      (match inst
+             [:CONST idx] (recur (inc ip)
+                                 (cons (nth consts idx) stack))
 
-          bytecode (nth inst 0)]
-      (println stack "<< stack")
-      (case bytecode
-        :CONST (let [[_ idx] inst]
-                 (recur (inc ip)
-                        (cons (nth consts idx)
-                              stack)))
+             [:DEF-NS-NAME nm] (let [val (first stack)
+                                     var (->Def nm val)]
+                                 (swap! globals assoc nm var)
+                                 (recur (inc ip) (cons var (next stack))))
 
-        :DEF-NS-NAME (let [val (first stack)
-                           [_ nm] inst
-                           var (->Def nm val)]
-                       (swap! globals assoc nm var)
-                       (recur (inc ip) (cons var (next stack))))
-        :POP (recur (inc ip)
-                    (next stack))
-        :INVOKE (let [argc (nth inst 1)
-                      args (take (inc argc) stack)
-                      retval (invoke (first args) (vec (rest args)) globals consts)
-                      stack (drop (inc argc) stack)]
-                  (recur (inc ip)
-                         (cons retval stack)))
-        :LOAD-GLOBAL (let [[_ nm] inst]
-                       (recur (inc ip)
-                              (cons (@globals nm) stack)))
-        :LOAD-ARG (let [[_ idx] inst]
-                    (assert (< idx (count args)) (str "arg idx out of range " idx " in " args))
-                    (recur (inc ip)
-                           (cons (nth args idx)
-                                 stack)))
-        :RET-VAL (first stack)))))
+             [:POP] (recur (inc ip) (next stack))
+
+             [:INVOKE argc] (let [args (take (inc argc) stack)
+                                  retval (invoke (first args) (vec (rest args)) globals consts)
+                                  stack (drop (inc argc) stack)]
+                              (recur (inc ip)
+                                     (cons retval stack)))
+
+             [:LOAD-GLOBAL nm] (recur (inc ip)
+                                      (cons (@globals nm) stack))
+
+             [:LOAD-ARG idx] (do (assert (< idx (count args))
+                                         (str "arg idx out of range " idx " in " args))
+                                 (recur (inc ip)
+                                        (cons (nth args idx)
+                                              stack)))
+             [:RET-VAL] (first stack)
+
+             [:INTRINSIC 'clojure.metal.native/<] (let [retval (math< (first stack)
+                                                                      (second stack))]
+                                                    (recur (inc ip)
+                                                           (->> stack
+                                                                next
+                                                                next
+                                                                (cons retval))))
+
+             [:INTRINSIC 'clojure.metal.native/+] (let [retval (math+ (first stack)
+                                                                      (second stack))]
+                                                    (recur (inc ip)
+                                                           (->> stack
+                                                                next
+                                                                next
+                                                                (cons retval))))
+
+             [:JMP-IF-FALSE a] (if (identical? WFalse (first stack))
+                                  (recur (+ ip a)
+                                         (next stack))
+                                  (recur (inc ip)
+                                         (next stack)))
+             [:JMP a] (recur (+ ip a)
+                             stack)))))
 
 (defn debug [x]
-  (clojure.pprint/pprint x)
+  (clojure.pprint/pprint (an-ast/postwalk x #(if (map? %)
+                                               (dissoc % :env)
+                                               %)))
   x)
 
 (-> (analyze '(do
-
-                (defn baz [x]
-                    x)
-                ((defn bing
-                     ([]
-                        (bing 3))
-                     ([x]
-                        (baz x))))))
+                (defn + [x y]
+                  (clojure.metal.native/+ x y))
+                #_(defn - [x y]
+                  (clojure.metal.native/- x y))
+                (defn < [x y]
+                  (clojure.metal.native/< x y))
+                (defn count-up [x max]
+                  (if (< x max)
+                    (count-up (+ x 1) max)
+                    x))
+                (count-up 0 1000000)
+                #_(defn fib [max]
+                  (if (< max 2)
+                    max
+                    (+ (fib (- max 1))
+                       (fib (- max 2)))))
+                #_(fib 10)))
+    debug
     compile-ast
     debug
     (as-> data
-          (run-instructions (atom {}) (:consts data) [] (:instructions data)))
-    (clojure.pprint/pprint))
+          (let [globals (atom {})]
+            (-> (time (run-instructions  globals (:consts data) [] (:instructions data)))
+                (vector  @globals)
+                (clojure.pprint/pprint)))))
