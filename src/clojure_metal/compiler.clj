@@ -3,6 +3,7 @@
   (:require [clojure-metal.types :refer :all]
             [clojure-metal.emit :refer :all]
             [clojure-metal.llvmc :as llvm]
+            [clojure-metal.targets.target :as target]
             [clojure-metal.analyzer :as analyzer]
             [clojure-metal.primitives :as primitives]
             [clojure-metal.gc :as gc]
@@ -285,30 +286,41 @@
 
 
 
+(def default-target-fn (atom nil))
+
+(defn default-target []
+  (require 'clojure-metal.targets.darwin)
+  (let [init (intern 'clojure-metal.targets.darwin 'init-target)]
+    (init (fn [d-fn]
+              (reset! default-target-fn d-fn)))
+    (@default-target-fn)))
+
 (defn compile [form]
-  (let [ast (analyzer/analyze form)]
-    (-> (gen-plan
-         [_ (gc/add-gc)
-          _ (primitives/add-pimitives)
-          _ (-emit ast)
-          _ (gc/generate-gc-fns)
-          _ (generate-polymorphic-bodies)
-          _ (build-fn-bodies)
-          f (find-function "user.-main_0")
-          _ (gc/main
-             (gen-plan
-              [_ (<-b (llvm/BuildCall f (into-array Pointer []) 0 "result"))]
-              nil))]
-         nil)
-        get-state
-        second
-        :module
-        llvm/dump
-        llvm/verify
-        ;llvm/optimize
-        ;llvm/dump
-        (llvm/emit-to-file "gc_test.s")
-        )))
+  (let [ast (analyzer/analyze form)
+        module (->(gen-plan
+                   [_ (gc/add-gc)
+                    _ (primitives/add-pimitives)
+                    _ (-emit ast)
+                    _ (gc/generate-gc-fns)
+                    _ (generate-polymorphic-bodies)
+                    _ (build-fn-bodies)
+                    f (find-function "user.-main_0")
+                    _ (gc/main
+                       (gen-plan
+                        [_ (<-b (llvm/BuildCall f (into-array Pointer []) 0 "result"))]
+                        nil))]
+                   nil)
+                  get-state
+                  second
+                  :module
+                  llvm/dump
+                  llvm/verify
+                  llvm/optimize
+                  llvm/dump
+                  llvm/verify
+                  )]
+    (target/emit-to-file (default-target) module {:filename "out.s"
+                                                      :obj-type :asm})))
 
 (compile '(do (deftype Cons [head tail meta]
                 ISeq
@@ -324,7 +336,7 @@
                 (Cons. x o nil))
 
               (defn -main []
-                #_(loop [x nil]
 
-                  x
-                  #_(recur (cons 1 x))))))
+                (loop [x nil]
+
+                  (recur (cons 1 x))))))

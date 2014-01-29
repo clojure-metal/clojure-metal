@@ -1,6 +1,13 @@
 (ns clojure-metal.analyzer
-  (:refer-clojure :exclude [cast])
-  (:require [clojure.tools.analyzer :as an]))
+  (:refer-clojure :exclude [cast eval])
+  (:require [clojure.tools.analyzer :as an]
+            [clojure.tools.analyzer.utils :as an-util]
+            [clojure.tools.analyzer.ast :as an-ast]))
+
+
+(defmethod print-method 'clojure.lang.Atom
+  [x ^java.io.Writer w]
+  (.write w "Atom<>"))
 
 (defn partition-on [pred coll]
   (let [a (atom 0)]
@@ -9,6 +16,7 @@
                       (swap! a inc))
                     @a) coll)))
 
+(def parse nil)
 (defmulti parse (fn [[nm] env]
                   nm))
 
@@ -21,54 +29,92 @@
 
 (defmethod parse :default
   [form env]
-  (println "fmr " form)
   (if (and (seq? form)
            (symbol? (first form))
            (.endsWith (name (first form)) "."))
     (parse-ctor form env)
     (an/-parse form env)))
 
+(defn add-fn-var [{:keys [ns namespaces] :as env} nm var]
+  (let [v (get-in env [ns :mappings nm])]
+    (assert (nil? v) (str "Can't re-map var" ns "/" nm))
+    (swap! namespaces assoc-in [ns :mappings nm] var)))
+
+
+
 (defmethod parse 'deftype
-  [[_ name fields & specs] env]
-  (let [specs (partition-on symbol? specs)]
-    {:op :deftype
-     :type-name name
-     :fields fields
-     :field-count (count fields)
-     :children [:protocol-fns]
-     :env env
-     :protocol-fns
-     (vec (for [[proto & methods] specs
-                [nm args & rest :as form] methods]
-            (let [fields-expr (map-indexed
-                               (fn [idx name]
-                                      {:op :binding
-                                       :local :field
-                                       :field-id idx
-                                       :fields fields
-                                       :field-count (count fields)
-                                       :env env
-                                       :form name})
-                               fields)
-                  menv (assoc env
-                        :locals (zipmap fields fields-expr))]
-              {:op :protocol-fn
-               :protocol proto
-               :fn-name nm
-               :args args
-               :arg-count (count args)
-               :children [:body]
-               :body (an/analyze-fn-method (next form) menv)})))}))
+  [[_ name fields & specs] {:keys [ns namespaces] :as env}]
+  (let [specs (partition-on symbol? specs)
+        typedef {:op :deftype
+                 :type-name name
+                 :fields fields
+                 :field-count (count fields)
+                 :children [:protocol-fns]
+                 :env env
+                 :protocol-fns
+                 (vec (for [[proto & methods] specs
+                            [nm args & rest :as form] methods]
+                        (let [fields-expr (map-indexed
+                                           (fn [idx name]
+                                             {:op :binding
+                                              :local :field
+                                              :field-id idx
+                                              :fields fields
+                                              :field-count (count fields)
+                                              :env env
+                                              :form name})
+                                           fields)
+                              menv (assoc env
+                                     :locals (zipmap fields fields-expr))
+                              resolved (an-util/resolve-var proto env)
+                              fn-var  {:op :protocol-fn
+                                       :protocol proto
+                                       :fn-name nm
+                                       :args args
+                                       :arg-count (count args)
+                                       :children [:body]
+                                       :body (an/analyze-fn-method (next form) menv)}]
+                          (assert resolved (str "Couldn't resolve protocol " proto))
+                          (assert (= (:op resolved) :defprotocol))
+                          (assert (get-in resolved [:specs nm (count args)])
+                                  (str "Invalid arity for function " nm " in " resolved))
+                          fn-var)))}]
+    (swap! namespaces assoc-in [ns :mappings name] typedef)
+    {:op :void
+     :env env}))
+
+(defmethod parse 'defprotocol
+  [[_ nm & specs] {:keys [ns namespaces] :as env}]
+  (let [specs (reduce
+               (fn [acc [name args]]
+                 (assoc-in acc [name (count args)] {:args args
+                                                    :fixed-arity (count args)})
+                 )
+               {}
+               specs)
+        var {:op :defprotocol
+             :name (symbol (name (:ns env)) (name nm))
+             :specs specs}]
+    (swap! namespaces assoc-in [ns :mappings nm] var)
+    {:op :void
+     :env env}))
 
 (defmethod parse 'defn
   [[_ name & rest] env]
   (let [methods (if (vector? (first rest))
                   [rest]
-                  rest)]
-    {:op :defn
-     :fn-name name
-     :env env
-     :fn-methods (mapv #(an/analyze-fn-method % env) methods)}))
+                  rest)
+        methods (mapv #(an/analyze-fn-method % env) methods)
+        allowed-arities (set (map :fixed-arity methods))
+        var {:op :defn
+             :fn-name name
+             :allowed-arities allowed-arities
+             :children [:methods]
+             :env env
+             :methods methods}]
+    (add-fn-var env name (symbol (clojure.core/name (:ns env))
+                                 (clojure.core/name name)))
+    var))
 
 (defmethod parse 'loop
   [[_ & rest] env]
@@ -78,13 +124,19 @@
   [[_ & rest] env]
   (an/parse (cons 'let* rest) env))
 
-(defn macroexpand-it [x y]
-  (println "macro " x)
-  x)
+(defn macroexpand-it [form env]
+  (if (seq? form)
+    (let [[sym] form]
+      (if (= sym 'defn)
+        (let [[_ nm & rest] form]
+          `(def ~nm (fn* ~@rest)))
+        form))
+    form))
 
-(defn create-var [x]
-  (println "create-var" x)
-  x)
+(defn create-var [nm env]
+  {:op :var
+   :name nm
+   :ns (:ns env)})
 
 (defn analyze
   [form ]
@@ -93,3 +145,186 @@
             an/parse         parse
             an/var?          var?]
     (an/analyze form (an/empty-env))))
+
+(require '[fipp.edn :refer  [pprint IPretty]])
+
+(extend-protocol IPretty
+  clojure.lang.Atom
+  (-pretty [x]
+    [:text "Atom<>"]))
+
+
+(defn remove-env
+  [ast]
+  (if (map? ast)
+    (dissoc ast :env)
+    ast))
+
+(defmulti node->module (fn [state node]
+                         (:op node)))
+
+(defmethod node->module :default
+  [state node]
+  node)
+
+(defn make-full-name
+  [ns nm]
+  {:pre [ns nm]}
+  (symbol (name ns) (name nm)))
+
+(declare run-instructions)
+
+(defprotocol IInvokable
+  (invoke [f args globals consts]))
+
+(defrecord WInteger [value])
+(defrecord Fn [name methods]
+  IInvokable
+  (invoke [f args globals consts]
+    (let [arity (get methods (count args))]
+      (assert arity (str "No arity " (count args) " in " methods))
+      (run-instructions  globals consts args (:instructions arity)))))
+(defrecord FnMethod [instructions])
+(defrecord Module [consts instructions])
+(defrecord Def [name value]
+  IInvokable
+  (invoke [f args globals consts]
+    (invoke value args globals consts)))
+
+
+(defmulti -compile-ast (fn [{:keys [op]} locals]
+                         op))
+
+(defn combine-ns-name [ns nm]
+  (symbol (name ns) (name nm)))
+
+(defmethod -compile-ast :invoke
+  [{:keys [fn args]} locals]
+  `[~@(mapcat #(-compile-ast % locals) args)
+    ~@(-compile-ast fn locals)
+    [:INVOKE ~(count args)]])
+
+(defmethod -compile-ast :do
+  [{:keys [statements ret]} locals]
+  `[~@(mapcat
+       (fn [statement]
+         `[~@(-compile-ast statement locals)
+           [:POP]])
+       statements)
+    ~@(-compile-ast ret locals)])
+
+(defmethod -compile-ast :def
+  [{:keys [name init env] :as ast} locals]
+  `[~@(-compile-ast init locals)
+    [:DEF-NS-NAME ~(combine-ns-name (:ns env) name)]])
+
+(defn add-const! [locals value]
+  (if-let [id (get-in @locals [:consts value])]
+    id
+    (do (swap! locals update-in [:consts]
+               #(assoc % value (count %)))
+        (get-in @locals [:consts value]))))
+
+(defmethod -compile-ast :const
+  [{:keys [form type]} locals]
+  (let [id (add-const! locals (->WInteger form))]
+    [[:CONST id]]))
+
+(defmethod -compile-ast :local
+  [{:keys [arg-id]} locals]
+  [[:LOAD-ARG arg-id]])
+
+
+
+(defmethod -compile-ast :maybe-class
+  [{:keys [class env]} locals]
+  (let [resolved (an-util/resolve-var class env)]
+    (assert resolved (str "Cannot resolve " class " in " (:ns env)))
+    [[:LOAD-GLOBAL (combine-ns-name (:ns resolved) (:name resolved))]]))
+
+(defmethod -compile-ast :fn
+  [{:keys [methods name] :as ast} locals]
+  (let [cmethods (->> (for [method methods]
+                        (-compile-ast method locals))
+                      (into {}))
+        const {:methods cmethods
+               :name name}
+        id (add-const! locals (->Fn name cmethods))]
+    [[:CONST id]]))
+
+(defmethod -compile-ast :fn-method
+  [{:keys [methods name body fixed-arity] :as ast} locals]
+  [fixed-arity (->FnMethod `[~@(-compile-ast body locals)
+                             [:RET-VAL]])])
+
+(defn compile-ast
+  ([ast]
+     (compile-ast ast (atom {:consts {}})))
+  ([ast locals]
+     (map->Module
+      (merge
+       {:instructions `[~@(-compile-ast ast locals)
+                        [:RET-VAL]]}
+       (-> @locals
+           (update-in [:consts]
+                      (fn [mp]
+                        (let [inverted (zipmap (vals mp)
+                                               (keys mp))]
+                          (into [] (for [v (range (count mp))]
+                                     (get inverted v)))))))))))
+
+
+(defn run-instructions [globals consts args instructions]
+  (loop [ip 0
+         stack ()]
+    (let [inst (nth instructions ip)
+
+          bytecode (nth inst 0)]
+      (println stack "<< stack")
+      (case bytecode
+        :CONST (let [[_ idx] inst]
+                 (recur (inc ip)
+                        (cons (nth consts idx)
+                              stack)))
+
+        :DEF-NS-NAME (let [val (first stack)
+                           [_ nm] inst
+                           var (->Def nm val)]
+                       (swap! globals assoc nm var)
+                       (recur (inc ip) (cons var (next stack))))
+        :POP (recur (inc ip)
+                    (next stack))
+        :INVOKE (let [argc (nth inst 1)
+                      args (take (inc argc) stack)
+                      retval (invoke (first args) (vec (rest args)) globals consts)
+                      stack (drop (inc argc) stack)]
+                  (recur (inc ip)
+                         (cons retval stack)))
+        :LOAD-GLOBAL (let [[_ nm] inst]
+                       (recur (inc ip)
+                              (cons (@globals nm) stack)))
+        :LOAD-ARG (let [[_ idx] inst]
+                    (assert (< idx (count args)) (str "arg idx out of range " idx " in " args))
+                    (recur (inc ip)
+                           (cons (nth args idx)
+                                 stack)))
+        :RET-VAL (first stack)))))
+
+(defn debug [x]
+  (clojure.pprint/pprint x)
+  x)
+
+(-> (analyze '(do
+
+                (defn baz [x]
+                    x)
+                ((defn bing
+                     ([]
+                        (bing 3))
+                     ([x]
+                        (baz x))))))
+    compile-ast
+    debug
+    (as-> data
+          (run-instructions (atom {}) (:consts data) [] (:instructions data)))
+    (clojure.pprint/pprint))

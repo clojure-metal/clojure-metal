@@ -3,7 +3,7 @@
   (:require [clojure.java.shell :as shell]
             [clojure.string :as string]))
 
-(def ^:dynamic *lib* 'LLVM-3.4)
+(def ^:dynamic *lib* 'LLVM-3.5svn)
 
 (def strip-chars 4)
 
@@ -558,9 +558,9 @@
 (defn make-target-machine [module]
   (let [target (GetTarget module)]
     (println "--->" target (target-seq))
-    (CreateTargetMachine (:target (second (target-seq)))
-                         "x86_x64-apple-darwin12.2.1"
-                         ""
+    (CreateTargetMachine (:target (first (target-seq)))
+                         "x86_x64"
+                         "generic"
                          ""
                          LLVMCodeGenLevelDefault
                          LLVMRelocDefault
@@ -578,10 +578,12 @@
         tm (make-target-machine module)]
     (assert tm)
     (println (GetTargetMachineTriple tm))
-    (SetDataLayout module "x86_64-apple-darwin")
+;    (SetDataLayout module "x86_64-apple-darwin")
+
+
     (when (TargetMachineEmitToFile tm module filename LLVMAssemblyFile err)
       (assert false (.getString (value-at err) 0)))
-    (DisposeMessage (value-at err))
+     (DisposeMessage (value-at err))
     module))
 
 
